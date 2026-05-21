@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Build & generated data
+web/dist/
+web/public/stars.json
+web/public/site.json
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE / editors
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+*.swp
+*~
+
+# Vite
+*.local
+
+# Test / coverage (optional tooling)
+coverage/

@@ -1,0 +1,61 @@
+name: Build and Deploy My Stars
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pages-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate stars page
+        run: npm run generate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+
+      - name: Build SPA
+        run: npm run build:pages
+        env:
+          OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          VITE_PAGES: 'true'
+
+      - name: Read deploy config
+        id: deploycfg
+        run: |
+          PUBLISH_DIR=$(node -e "const c=require('./config.json');console.log((c.deployConfig&&c.deployConfig.publishDir)||'web/dist')")
+          FORCE_ORPHAN=$(node -e "const c=require('./config.json');console.log((c.deployConfig&&c.deployConfig.forceOrphan)!==false?'true':'false')")
+          echo "publish_dir=$PUBLISH_DIR" >> "$GITHUB_OUTPUT"
+          echo "force_orphan=$FORCE_ORPHAN" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ${{ steps.deploycfg.outputs.publish_dir }}
+          force_orphan: ${{ steps.deploycfg.outputs.force_orphan == 'true' }}

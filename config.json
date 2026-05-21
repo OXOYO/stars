@@ -1,0 +1,20 @@
+{
+  "pageConfig": {
+    "siteName": "Stars",
+    "defaultUiLocale": "zh-CN",
+    "showLanguage": true,
+    "showStarsCount": true,
+    "showLicense": true,
+    "defaultSort": "recently_starred",
+    "virtualRowHeight": 140,
+    "searchDebounceMs": 300,
+    "maxItems": 0,
+    "toolRepoOwner": "OXOYO",
+    "toolRepoName": "stars"
+  },
+  "deployConfig": {
+    "publishDir": "web/dist",
+    "forceOrphan": true,
+    "pagesBase": "repo"
+  }
+}

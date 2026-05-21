@@ -1,0 +1,27 @@
+{
+  "name": "stars",
+  "version": "1.0.0",
+  "description": "Auto generate GitHub stars visualization page",
+  "private": true,
+  "scripts": {
+    "generate": "node generate.js",
+    "dev": "npm run generate && npm run dev:ui",
+    "dev:ui": "vite --config web/vite.config.mjs",
+    "dev:stop": "node scripts/stop-dev.js",
+    "build": "vite build --config web/vite.config.mjs",
+    "build:pages": "cross-env VITE_PAGES=true vite build --config web/vite.config.mjs",
+    "preview": "npm run generate && npm run build && npm run preview:serve",
+    "preview:pages": "npm run generate && npm run build:pages && npm run preview:serve",
+    "preview:serve": "vite preview --config web/vite.config.mjs --port 4173 --strictPort"
+  },
+  "dependencies": {
+    "@tanstack/vue-virtual": "^3.13.24",
+    "axios": "^1.7.9",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "cross-env": "^7.0.3",
+    "vite": "^6.0.3"
+  }
+}
