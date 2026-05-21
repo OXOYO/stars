@@ -1,23 +1,19 @@
 <script setup>
-import { computed, nextTick, ref } from 'vue';
-import {
-  useStarsStore,
-  patchLanguageInQuery,
-  patchLicenseInQuery,
-  patchStarredYearInQuery,
-  requestStarsRowRemeasure,
-} from '../composables/useStarsStore';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { useStarsStore, requestStarsRowRemeasure } from '../composables/useStarsStore';
 import { useStarsI18n } from '../composables/useStarsI18n';
-import {
-  buildChartOverlayCounts,
-  itemLanguageKey,
-  itemYearKey,
-} from '../utils/stars-filter';
+import { useMobileSheetInset } from '../composables/useMobileSheetInset';
+import { MOBILE_MEDIA } from '../composables/useMediaQuery';
+import StarsStatsCharts from './StarsStatsCharts.vue';
 
 const STATS_EXPANDED_KEY = 'stars-stats-expanded';
 
-function readStatsExpanded() {
-  if (typeof sessionStorage === 'undefined') return true;
+const props = defineProps({
+  isMobile: { type: Boolean, default: false },
+});
+
+function readStatsExpanded(isMobileViewport) {
+  if (typeof sessionStorage === 'undefined') return !isMobileViewport;
   try {
     const v = sessionStorage.getItem(STATS_EXPANDED_KEY);
     if (v === '0') return false;
@@ -25,104 +21,69 @@ function readStatsExpanded() {
   } catch {
     /* ignore */
   }
-  return true;
+  return !isMobileViewport;
 }
 
 const store = useStarsStore();
 const { t } = useStarsI18n();
-const expanded = ref(readStatsExpanded());
+const expanded = ref(
+  readStatsExpanded(
+    typeof window !== 'undefined' ? window.matchMedia(MOBILE_MEDIA).matches : false
+  )
+);
 
 const stats = computed(() => store.stats);
-
-const filterCtx = computed(() => ({
-  q: store.qApplied,
-  language: store.language,
-  license: store.license,
-  starredYear: store.starredYear,
-  type: store.type,
-  sort: store.sort,
-}));
-
 const showOverlay = computed(() => store.hasActiveFilters);
 
-const langOverlay = computed(() => {
-  if (!showOverlay.value || !stats.value?.topLanguages?.length) return null;
-  const keys = stats.value.topLanguages.map((r) => r.name);
-  return buildChartOverlayCounts(
-    store.items,
-    filterCtx.value,
-    'language',
-    keys,
-    itemLanguageKey
-  );
-});
+const statsSheetOpen = computed(() => props.isMobile && expanded.value && Boolean(stats.value));
+useMobileSheetInset(statsSheetOpen);
 
-const licOverlay = computed(() => {
-  if (!showOverlay.value || !stats.value?.topLicenses?.length) return null;
-  const keys = stats.value.topLicenses.map((r) => r.name);
-  return buildChartOverlayCounts(
-    store.items,
-    filterCtx.value,
-    'license',
-    keys,
-    (item) => item.license || ''
-  );
-});
-
-const yearOverlay = computed(() => {
-  if (!showOverlay.value || !stats.value?.starredByYear?.length) return null;
-  const keys = stats.value.starredByYear.map((r) => r.year);
-  return buildChartOverlayCounts(store.items, filterCtx.value, 'starredYear', keys, itemYearKey);
-});
-
-const maxLang = computed(() =>
-  Math.max(1, ...(stats.value?.topLanguages || []).map((x) => x.count))
-);
-const maxLic = computed(() =>
-  Math.max(1, ...(stats.value?.topLicenses || []).map((x) => x.count))
-);
-const maxYear = computed(() =>
-  Math.max(1, ...(stats.value?.starredByYear || []).map((x) => x.count))
+watch(
+  () => props.isMobile,
+  (mobile) => {
+    if (mobile && expanded.value) {
+      try {
+        if (sessionStorage.getItem(STATS_EXPANDED_KEY) !== '1') expanded.value = false;
+      } catch {
+        expanded.value = false;
+      }
+    }
+  }
 );
 
-function barWidth(count, max) {
-  return `${Math.round((count / max) * 100)}%`;
+watch(
+  () => props.isMobile && expanded.value,
+  (sheetOpen) => {
+    if (!props.isMobile) return;
+    document.body.style.overflow = sheetOpen ? 'hidden' : '';
+  }
+);
+
+function onKeydown(e) {
+  if (e.key === 'Escape' && props.isMobile && expanded.value) {
+    void closeSheet();
+  }
 }
 
-function overlayShare(filtered, total) {
-  if (!total || filtered <= 0) return '0%';
-  return `${Math.min(100, Math.round((filtered / total) * 100))}%`;
-}
+onMounted(() => {
+  window.addEventListener('keydown', onKeydown);
+});
 
-function overlayCount(map, key) {
-  return map?.get(key) ?? 0;
-}
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown);
+  if (props.isMobile) document.body.style.overflow = '';
+});
 
-function countLabel(map, key, total) {
-  const f = overlayCount(map, key);
-  if (!showOverlay.value || f === total) return String(total);
-  return t.value('statCountFiltered', {
-    filtered: f.toLocaleString(),
-    total: total.toLocaleString(),
-  });
-}
-
-function yearTitle(row) {
-  const f = overlayCount(yearOverlay.value, row.year);
-  if (!showOverlay.value) return `${row.year}: ${row.count.toLocaleString()}`;
-  return `${row.year}: ${f.toLocaleString()} / ${row.count.toLocaleString()}`;
-}
-
-function onLangClick(name) {
-  patchLanguageInQuery(store.language === name ? 'all' : name);
-}
-
-function onLicClick(name) {
-  patchLicenseInQuery(store.license === name ? 'all' : name);
-}
-
-function onYearClick(year) {
-  patchStarredYearInQuery(store.starredYear === year ? 'all' : year);
+async function closeSheet() {
+  if (!expanded.value) return;
+  expanded.value = false;
+  try {
+    sessionStorage.setItem(STATS_EXPANDED_KEY, '0');
+  } catch {
+    /* ignore */
+  }
+  await nextTick();
+  requestStarsRowRemeasure();
 }
 
 async function toggleExpanded() {
@@ -138,10 +99,52 @@ async function toggleExpanded() {
 </script>
 
 <template>
+  <Teleport v-if="props.isMobile && expanded && stats" to="body">
+    <div class="stars-mobile-sheet is-open" role="presentation">
+      <button
+        type="button"
+        class="stars-mobile-sheet__backdrop"
+        :aria-label="t('statPanelCollapse')"
+        tabindex="-1"
+        @click="closeSheet"
+      />
+      <div
+        class="stars-mobile-sheet__panel"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="t('statPanelTitle')"
+      >
+        <header class="stars-mobile-sheet__header">
+          <h2 class="stars-mobile-sheet__title">{{ t('statPanelTitle') }}</h2>
+          <button
+            type="button"
+            class="stars-mobile-sheet__close"
+            :aria-label="t('statPanelCollapse')"
+            @click="closeSheet"
+          >
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 1 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 1 1-1.275.326.749.749 0 0 1 .215-.734L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"
+              />
+            </svg>
+          </button>
+        </header>
+        <div class="stars-mobile-sheet__body stars-mobile-sheet__body--stats">
+          <StarsStatsCharts />
+        </div>
+      </div>
+    </div>
+  </Teleport>
+
   <section
     v-if="stats"
     class="stars-stats"
-    :class="{ 'is-collapsed': !expanded, 'has-overlay': showOverlay }"
+    :class="{
+      'is-collapsed': !expanded || props.isMobile,
+      'has-overlay': showOverlay,
+      'stars-stats--mobile': props.isMobile,
+    }"
     aria-label="Statistics"
   >
     <div class="stars-stats__header">
@@ -158,7 +161,7 @@ async function toggleExpanded() {
       >
         <svg
           class="stars-stats__toggle-icon"
-          :class="{ 'is-expanded': expanded }"
+          :class="{ 'is-expanded': expanded && !props.isMobile }"
           viewBox="0 0 16 16"
           width="14"
           height="14"
@@ -173,101 +176,6 @@ async function toggleExpanded() {
       </button>
     </div>
 
-    <div v-show="expanded" class="stars-stats__body">
-      <p class="stars-stats__hint">{{ t('statClickHint') }}</p>
-
-      <div v-if="stats.topLanguages?.length" class="stars-stats__block">
-        <h3 class="stars-stats__heading">{{ t('statTopLang') }}</h3>
-        <ul class="stars-stats__bars">
-          <li v-for="row in stats.topLanguages" :key="row.name">
-            <button
-              type="button"
-              class="stars-stats__bar-btn"
-              :class="{ 'is-active': store.language === row.name }"
-              @click="onLangClick(row.name)"
-            >
-              <span class="stars-stats__bar-label">{{ row.name }}</span>
-              <span class="stars-stats__bar-track">
-                <span
-                  class="stars-stats__bar-fill"
-                  :style="{ width: barWidth(row.count, maxLang) }"
-                >
-                  <span
-                    v-if="showOverlay && overlayCount(langOverlay, row.name) > 0"
-                    class="stars-stats__bar-overlay"
-                    :style="{
-                      width: overlayShare(overlayCount(langOverlay, row.name), row.count),
-                    }"
-                  />
-                </span>
-              </span>
-              <span class="stars-stats__bar-count">{{ countLabel(langOverlay, row.name, row.count) }}</span>
-            </button>
-          </li>
-        </ul>
-      </div>
-
-      <div v-if="stats.topLicenses?.length" class="stars-stats__block">
-        <h3 class="stars-stats__heading">{{ t('statTopLicense') }}</h3>
-        <ul class="stars-stats__bars">
-          <li v-for="row in stats.topLicenses" :key="row.name">
-            <button
-              type="button"
-              class="stars-stats__bar-btn"
-              :class="{ 'is-active': store.license === row.name }"
-              @click="onLicClick(row.name)"
-            >
-              <span class="stars-stats__bar-label">{{ row.name }}</span>
-              <span class="stars-stats__bar-track">
-                <span
-                  class="stars-stats__bar-fill stars-stats__bar-fill--license"
-                  :style="{ width: barWidth(row.count, maxLic) }"
-                >
-                  <span
-                    v-if="showOverlay && overlayCount(licOverlay, row.name) > 0"
-                    class="stars-stats__bar-overlay stars-stats__bar-overlay--license"
-                    :style="{
-                      width: overlayShare(overlayCount(licOverlay, row.name), row.count),
-                    }"
-                  />
-                </span>
-              </span>
-              <span class="stars-stats__bar-count">{{ countLabel(licOverlay, row.name, row.count) }}</span>
-            </button>
-          </li>
-        </ul>
-      </div>
-
-      <div v-if="stats.starredByYear?.length" class="stars-stats__block stars-stats__block--years">
-        <h3 class="stars-stats__heading">{{ t('statByYear') }}</h3>
-        <div class="stars-stats__years">
-          <button
-            v-for="row in stats.starredByYear"
-            :key="row.year"
-            type="button"
-            class="stars-stats__year-col"
-            :class="{ 'is-active': store.starredYear === row.year }"
-            :title="yearTitle(row)"
-            :aria-label="yearTitle(row)"
-            :aria-pressed="store.starredYear === row.year"
-            @click="onYearClick(row.year)"
-          >
-            <span
-              class="stars-stats__year-bar"
-              :style="{ height: barWidth(row.count, maxYear) }"
-            >
-              <span
-                v-if="showOverlay && overlayCount(yearOverlay, row.year) > 0"
-                class="stars-stats__year-overlay"
-                :style="{
-                  height: overlayShare(overlayCount(yearOverlay, row.year), row.count),
-                }"
-              />
-            </span>
-            <span class="stars-stats__year-label">{{ row.year.slice(2) }}</span>
-          </button>
-        </div>
-      </div>
-    </div>
+    <StarsStatsCharts v-if="!props.isMobile && expanded" />
   </section>
 </template>

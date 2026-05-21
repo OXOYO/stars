@@ -170,6 +170,22 @@ async function toggleDesc() {
 function onTopicClick(topic) {
   applyTopicSearch(topic);
 }
+
+/** Shields 风格数值：25k / 1.2M */
+function formatShieldCount(n) {
+  const num = Number(n) || 0;
+  if (num >= 1_000_000) {
+    const v = num / 1_000_000;
+    const s = v >= 10 ? String(Math.round(v)) : String(Math.round(v * 10) / 10).replace(/\.0$/, '');
+    return `${s}M`;
+  }
+  if (num >= 1000) {
+    const v = num / 1000;
+    const s = v >= 10 ? String(Math.round(v)) : String(Math.round(v * 10) / 10).replace(/\.0$/, '');
+    return `${s}k`;
+  }
+  return num.toLocaleString();
+}
 </script>
 
 <template>
@@ -212,26 +228,27 @@ function onTopicClick(topic) {
         <div class="star-card__badges">
           <span
             v-if="item.forksCount > 0"
-            class="star-card__stat"
-            :title="t('forksCount')"
+            class="star-card__shield"
+            :title="`${t('forksCount')}: ${item.forksCount.toLocaleString()}`"
           >
-            {{ item.forksCount.toLocaleString() }} {{ t('forksCount') }}
+            <span class="star-card__shield-label">{{ t('shieldFork') }}</span>
+            <span class="star-card__shield-value">{{ formatShieldCount(item.forksCount) }}</span>
           </span>
           <span
             v-if="item.watchersCount > 0"
-            class="star-card__stat"
-            :title="t('watchersCount')"
+            class="star-card__shield"
+            :title="`${t('watchersCount')}: ${item.watchersCount.toLocaleString()}`"
           >
-            {{ item.watchersCount.toLocaleString() }} {{ t('watchersCount') }}
+            <span class="star-card__shield-label">{{ t('shieldWatch') }}</span>
+            <span class="star-card__shield-value">{{ formatShieldCount(item.watchersCount) }}</span>
           </span>
-          <span v-if="showStarsCount" class="star-card__stars" :title="t('stars')">
-            <svg class="star-card__star-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-              <path
-                fill="currentColor"
-                d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"
-              />
-            </svg>
-            {{ item.stars.toLocaleString() }}
+          <span
+            v-if="showStarsCount"
+            class="star-card__shield star-card__shield--stars"
+            :title="`${t('stars')}: ${item.stars.toLocaleString()}`"
+          >
+            <span class="star-card__shield-label">{{ t('shieldStars') }}</span>
+            <span class="star-card__shield-value">{{ formatShieldCount(item.stars) }}</span>
           </span>
         </div>
       </div>

@@ -41,6 +41,7 @@ export default defineConfig({
   base,
   publicDir: path.join(__dirname, 'public'),
   server: {
+    host: true,
     port: Number(process.env.PORT) || 4173,
     strictPort: true,
   },

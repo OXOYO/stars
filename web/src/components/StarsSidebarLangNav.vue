@@ -12,18 +12,23 @@ function langLabel(name) {
   return name === '其他' ? t.value('otherLang') : name;
 }
 
-const navItems = computed(() => {
+const allItem = computed(() => ({
+  key: 'all',
+  name: 'all',
+  count: store.total,
+  label: t.value('langAll'),
+  active: store.language === 'all',
+}));
+
+const langItems = computed(() => {
   const options = buildLanguageOptions(store.items || []);
-  return [
-    { key: 'all', name: 'all', count: store.total, label: t.value('langAll'), active: store.language === 'all' },
-    ...options.map((opt) => ({
-      key: opt.name,
-      name: opt.name,
-      count: opt.count,
-      label: langLabel(opt.name),
-      active: store.language === opt.name,
-    })),
-  ];
+  return options.map((opt) => ({
+    key: opt.name,
+    name: opt.name,
+    count: opt.count,
+    label: langLabel(opt.name),
+    active: store.language === opt.name,
+  }));
 });
 
 function onLangClick(key) {
@@ -33,23 +38,29 @@ function onLangClick(key) {
 
 <template>
   <div v-if="!store.loading && !store.error" class="stars-sidebar-lang-wrap">
-  <nav class="stars-sidebar-lang" aria-label="Language filter">
     <button
-      v-for="item in navItems"
-      :key="item.key"
       type="button"
-      class="stars-sidebar-lang__link"
-      :class="[
-        { 'is-active': item.active },
-        item.key !== 'all' ? `lang--${langSlug(item.name)}` : '',
-      ]"
-      :style="item.key !== 'all' ? { '--lang-accent': langColor(item.name) } : undefined"
-      @click="onLangClick(item.key)"
+      class="stars-sidebar-lang__link stars-sidebar-lang__all"
+      :class="{ 'is-active': allItem.active }"
+      @click="onLangClick('all')"
     >
-      <span v-if="item.key !== 'all'" class="stars-sidebar-lang__dot" />
-      <span class="stars-sidebar-lang__label">{{ item.label }}</span>
-      <span class="stars-sidebar-lang__count">{{ item.count }}</span>
+      <span class="stars-sidebar-lang__label">{{ allItem.label }}</span>
+      <span class="stars-sidebar-lang__count">{{ allItem.count }}</span>
     </button>
-  </nav>
+    <nav class="stars-sidebar-lang" :aria-label="t('filterLang')">
+      <button
+        v-for="item in langItems"
+        :key="item.key"
+        type="button"
+        class="stars-sidebar-lang__link"
+        :class="[{ 'is-active': item.active }, `lang--${langSlug(item.name)}`]"
+        :style="{ '--lang-accent': langColor(item.name) }"
+        @click="onLangClick(item.key)"
+      >
+        <span class="stars-sidebar-lang__dot" />
+        <span class="stars-sidebar-lang__label">{{ item.label }}</span>
+        <span class="stars-sidebar-lang__count">{{ item.count }}</span>
+      </button>
+    </nav>
   </div>
 </template>

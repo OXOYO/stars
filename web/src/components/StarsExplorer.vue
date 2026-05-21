@@ -11,6 +11,13 @@ import { useStarsI18n } from '../composables/useStarsI18n';
 import StarCard from './StarCard.vue';
 import StarsStatsBar from './StarsStatsBar.vue';
 import StarsActiveFilters from './StarsActiveFilters.vue';
+import StarsMobileToolbar from './StarsMobileToolbar.vue';
+
+defineProps({
+  isMobile: { type: Boolean, default: false },
+});
+
+const emit = defineEmits(['open-filters']);
 
 const store = useStarsStore();
 const { t } = useStarsI18n();
@@ -69,7 +76,8 @@ watch(
       {{ t('loadError', { error: store.error }) }}
     </p>
     <template v-else>
-      <StarsStatsBar />
+      <StarsMobileToolbar v-if="isMobile" @open-filters="emit('open-filters')" />
+      <StarsStatsBar :is-mobile="isMobile" />
       <StarsActiveFilters />
       <div class="stars-explorer__list-pane">
         <div v-if="store.filtered.length === 0" class="stars-explorer__empty">
