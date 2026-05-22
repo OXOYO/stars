@@ -25,7 +25,7 @@ CI 会使用 **`github.repository_owner`** 与**当前仓库名**拉取 Star 并
 
 | 触发方式 | 说明 |
 |----------|------|
-| **push 到 `main`** | 改配置或代码并推送后自动构建、部署 |
+| **push 到 `main`** | 仅当 `generate.js`、`config.json`、`package*.json`、`web/**` 或本 workflow 变更时自动构建（**改 README 等文档不会触发**） |
 | **每天 0:00 UTC** | 定时同步最新 Star |
 | **手动** | Actions → *Build and Deploy My Stars* → *Run workflow* |
 

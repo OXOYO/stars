@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - main
+    # 仅当影响构建/部署的文件变更时触发（改 README、LICENSE 等不会跑 CI）
+    paths:
+      - 'generate.js'
+      - 'config.json'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'web/**'
+      - '.github/workflows/build.yml'
   workflow_dispatch:
   schedule:
     - cron: '0 0 * * *'

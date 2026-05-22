@@ -25,7 +25,7 @@ CI uses **`github.repository_owner`** and the **current repository name** to fet
 
 | Trigger             | Description                                            |
 | ------------------- | ------------------------------------------------------ |
-| **push to `main`**  | Build and deploy after you push config or code         |
+| **push to `main`**  | Runs only when `generate.js`, `config.json`, `package*.json`, `web/**`, or this workflow changes (**README-only pushes do not trigger**) |
 | **Daily 00:00 UTC** | Scheduled sync of latest stars                         |
 | **Manual**          | Actions → _Build and Deploy My Stars_ → _Run workflow_ |
 
