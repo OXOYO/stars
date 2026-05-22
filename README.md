@@ -13,9 +13,11 @@ Fork 即用：自动拉取你的 Star 列表，用 Vue SPA 生成静态页并部
 1. **Fork** 本仓库到你的账号。
 2. 在 Fork 弹窗中建议勾选 **「仅复制默认分支」**（*Copy the DEFAULT branch only*），避免带上上游的 `gh-pages` 部署分支；未勾选也没关系，首次 CI 成功后会覆盖。
 3. 打开 Fork 仓库 → **Settings → Actions → General**，允许运行 Actions（若组织有策略需一并放行）。
-4. 等待或手动触发工作流 **Build and Deploy My Stars**（见下方「自动部署」）。
-5. 首次部署后，在 **Settings → Pages** 确认源为 **`gh-pages` 分支 / 根目录**（`peaceiris/actions-gh-pages` 首次成功运行后会写好）。
-6. 访问：`https://<你的用户名>.github.io/<仓库名>/`
+4. **首次部署（必做）** — Fork 完成**不会**自动跑 CI，需要你自己触发一次：
+   - 推荐：打开 **Actions** → 左侧选 **Build and Deploy My Stars** → 右侧 **Run workflow** → 分支选 **`main`** → **Run workflow**，等待出现绿勾（约 1～5 分钟，Star 多会更久）。
+   - 备选：向 `main` **push** 任意提交（也会触发，见下方「自动部署」）；或等到 **每天 0:00 UTC** 定时任务（首次仍建议先手动跑一次）。
+5. 工作流成功后，在 **Settings → Pages** 确认源为 **`gh-pages` 分支 / 根目录**（`peaceiris/actions-gh-pages` 首次成功运行后会写好）。
+6. 访问：`https://<你的用户名>.github.io/<仓库名>/`（Pages 生效可能再需 1～2 分钟）。
 
 CI 会使用 **`github.repository_owner`** 与**当前仓库名**拉取 Star 并构建，一般**无需改脚本**。可选：编辑根目录 `config.json` 修改站点标题、默认排序等。
 
@@ -31,6 +33,7 @@ CI 会使用 **`github.repository_owner`** 与**当前仓库名**拉取 Star 并
 
 ### Fork 注意
 
+- **Fork 当下不会自动部署**：必须完成上文第 4 步（手动 Run workflow 或 push），站点才会生成你自己的 Star 数据。
 - **`main` 不含构建产物**：`web/dist`、`web/public/stars.json`、`site.json` 在 `.gitignore` 中，不会 Fork 到过期的 dist。
 - **若 Fork 了上游的 `gh-pages`**：在首次自己的 CI 跑通前，Pages 可能短暂显示上游页面；跑通一次 workflow 或删除 Fork 里的 `gh-pages` 后再部署即可。
 - **改仓库名**：CI 会更新数据里的 `owner` / `repoName` 与 Pages 路径；`pageConfig.siteName` 需自行在 `config.json` 修改后重新部署。

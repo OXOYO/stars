@@ -13,9 +13,11 @@ For users who only want their own Star site without changing code:
 1. **Fork** this repository to your account.
 2. On the fork dialog, enable **Copy the DEFAULT branch only** so you do not copy the upstream `gh-pages` branch. If you copy all branches, your first successful CI run will overwrite `gh-pages` anyway.
 3. In the forked repo: **Settings → Actions → General** — allow Actions to run (org policies may apply).
-4. Wait for or manually run workflow **Build and Deploy My Stars** (see **Automatic deployment** below).
-5. After the first deploy, check **Settings → Pages**: source should be **`gh-pages` branch / root** (set up by `peaceiris/actions-gh-pages` after the first green run).
-6. Open: `https://<your-username>.github.io/<repo-name>/`
+4. **First deploy (required)** — forking alone **does not** start CI; trigger it once yourself:
+   - Recommended: **Actions** → **Build and Deploy My Stars** → **Run workflow** → branch **`main`** → **Run workflow**, then wait for a green check (about 1–5 minutes; longer with many stars).
+   - Alternatives: **push** any commit to `main` (also triggers CI; see **Automatic deployment** below), or wait for the **daily 00:00 UTC** schedule (still run manually the first time).
+5. After a successful workflow run, check **Settings → Pages**: source should be **`gh-pages` branch / root** (set up by `peaceiris/actions-gh-pages` after the first green run).
+6. Open: `https://<your-username>.github.io/<repo-name>/` (Pages may take another 1–2 minutes to go live).
 
 CI uses **`github.repository_owner`** and the **current repository name** to fetch stars and build. You usually **do not need to change scripts**. Optionally edit `config.json` at the repo root for site title, default sort, etc.
 
@@ -31,6 +33,7 @@ Pipeline: `generate` (GitHub API → `stars.json`) → `build:pages` (Vue → `w
 
 ### Fork notes
 
+- **No deploy on fork alone**: complete step 4 above (manual Run workflow or push) before your site shows your own stars.
 - **`main` has no build artifacts**: `web/dist`, `web/public/stars.json`, and `site.json` are gitignored.
 - **If you forked upstream `gh-pages`**: Pages may briefly show the upstream site until your workflow succeeds; run CI once or delete `gh-pages` on your fork and redeploy.
 - **Renaming the repo**: CI updates `owner` / `repoName` in data and the Pages base path; change `pageConfig.siteName` in `config.json` yourself if you want a new title.
