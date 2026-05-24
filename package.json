@@ -9,6 +9,7 @@
     "dev:ui": "vite --config web/vite.config.mjs",
     "dev:stop": "node scripts/stop-dev.js",
     "build": "vite build --config web/vite.config.mjs",
+    "build:favicon": "node scripts/build-favicon.js",
     "build:pages": "cross-env VITE_PAGES=true vite build --config web/vite.config.mjs",
     "preview": "npm run generate && npm run build && npm run preview:serve",
     "preview:pages": "npm run generate && npm run build:pages && npm run preview:serve",
@@ -22,6 +23,8 @@
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.1",
     "cross-env": "^7.0.3",
+    "sharp": "^0.34.5",
+    "to-ico": "^1.1.5",
     "vite": "^6.0.3"
   }
 }
