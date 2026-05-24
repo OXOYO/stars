@@ -38,6 +38,8 @@ const toolVersion = computed(() => {
   return typeof v === 'string' && v.trim() ? v.trim() : '';
 });
 
+const feedbackUrl = computed(() => `${toolRepoUrl.value}/issues/new`);
+
 const footerMetaHtml = computed(() => {
   const updatedAt = formatGeneratedAt(store.generatedAt, locale.value);
   return t.value('footerMeta', { updatedAt });
@@ -110,6 +112,25 @@ watch(siteTitle, (title) => {
             <span class="stars-app__lang-full">{{ t('langEn') }}</span>
           </button>
         </div>
+        <a
+          class="stars-app__feedback"
+          :href="feedbackUrl"
+          target="_blank"
+          rel="noreferrer"
+          :aria-label="t('navFeedback')"
+        >
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"
+            />
+            <path
+              fill="currentColor"
+              d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z"
+            />
+          </svg>
+          <span class="stars-app__feedback-label">{{ t('navFeedback') }}</span>
+        </a>
         <a
           class="stars-app__github"
           :href="githubUrl"

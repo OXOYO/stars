@@ -267,7 +267,8 @@ body,
   display: inline;
 }
 
-.stars-app__github {
+.stars-app__github,
+.stars-app__feedback {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
@@ -282,7 +283,8 @@ body,
   transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
 }
 
-.stars-app__github:hover {
+.stars-app__github:hover,
+.stars-app__feedback:hover {
   border-color: var(--stars-c-brand-1);
   color: var(--stars-c-brand-1);
   text-decoration: none;
@@ -1617,7 +1619,8 @@ a.star-card__avatar:focus-visible {
     display: none;
   }
 
-  .stars-app__github {
+  .stars-app__github,
+  .stars-app__feedback {
     justify-content: center;
     gap: 0;
     width: 28px;
@@ -1626,12 +1629,14 @@ a.star-card__avatar:focus-visible {
     box-shadow: none;
   }
 
-  .stars-app__github:hover {
+  .stars-app__github:hover,
+  .stars-app__feedback:hover {
     transform: none;
     box-shadow: none;
   }
 
-  .stars-app__github-label {
+  .stars-app__github-label,
+  .stars-app__feedback-label {
     display: none;
   }
 

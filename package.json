@@ -1,6 +1,6 @@
 {
   "name": "stars",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Auto generate GitHub stars visualization page",
   "private": true,
   "scripts": {
