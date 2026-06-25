@@ -1,17 +1,14 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
-import { useVirtualizer } from '@tanstack/vue-virtual';
-import {
-  useStarsStore,
-  registerStarsListScroller,
-  registerStarsRowRemeasure,
-  remeasureStarsList,
-} from '../composables/useStarsStore';
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue';
+import { useStarsStore } from '../composables/useStarsStore';
 import { useStarsI18n } from '../composables/useStarsI18n';
-import StarCard from './StarCard.vue';
 import StarsStatsBar from './StarsStatsBar.vue';
 import StarsActiveFilters from './StarsActiveFilters.vue';
+import StarsListPane from './StarsListPane.vue';
+import StarsViewToggle from './StarsViewToggle.vue';
 import StarsMobileToolbar from './StarsMobileToolbar.vue';
+
+const StarsGalaxyView = defineAsyncComponent(() => import('./StarsGalaxyView.vue'));
 
 defineProps({
   isMobile: { type: Boolean, default: false },
@@ -22,51 +19,45 @@ const emit = defineEmits(['open-filters']);
 const store = useStarsStore();
 const { t } = useStarsI18n();
 
-const listViewportRef = ref(null);
+const galaxyReady = ref(false);
 
-const virtualizer = useVirtualizer(
-  computed(() => ({
-    count: store.filtered.length,
-    getScrollElement: () => listViewportRef.value,
-    estimateSize: () => store.virtualRowHeight,
-    overscan: 8,
-    shouldAdjustScrollPositionOnItemSizeChange: () => false,
-  }))
+const showGalaxy = computed(() => store.viewMode === 'galaxy' && store.filtered.length > 0);
+
+function onGalaxySelect(item) {
+  store.selectGalaxyItem(item);
+}
+
+function syncFocusSelection() {
+  if (!store.galaxyFocus || store.galaxySelected) return;
+  const found = store.filtered.find((item) => item.id === store.galaxyFocus);
+  if (found) store.galaxySelected = found;
+}
+
+watch(
+  () => store.viewMode,
+  (mode) => {
+    if (mode === 'galaxy') {
+      galaxyReady.value = true;
+    }
+  },
+  { immediate: true }
 );
 
-const virtualRows = computed(() => virtualizer.value.getVirtualItems());
-
-function measureRow(el) {
-  if (el) {
-    virtualizer.value.measureElement(el);
-  }
-}
-
-function scrollListToTop() {
-  listViewportRef.value?.scrollTo({ top: 0, behavior: 'smooth' });
-}
+watch(
+  () => [store.filtered, store.galaxyFocus],
+  () => syncFocusSelection(),
+  { deep: false }
+);
 
 onMounted(async () => {
-  registerStarsListScroller(scrollListToTop);
-  registerStarsRowRemeasure((index) =>
-    remeasureStarsList(virtualizer, listViewportRef.value, index)
-  );
   await store.bootstrap();
+  syncFocusSelection();
   window.addEventListener('popstate', store.onPopState);
 });
 
 onUnmounted(() => {
-  registerStarsListScroller(null);
-  registerStarsRowRemeasure(null);
   window.removeEventListener('popstate', store.onPopState);
 });
-
-watch(
-  () => store.filtered.length,
-  () => {
-    remeasureStarsList(virtualizer, listViewportRef.value);
-  }
-);
 </script>
 
 <template>
@@ -78,44 +69,37 @@ watch(
     <template v-else>
       <StarsMobileToolbar v-if="isMobile" @open-filters="emit('open-filters')" />
       <StarsStatsBar :is-mobile="isMobile" />
-      <StarsActiveFilters />
-      <div class="stars-explorer__list-pane">
-        <div v-if="store.filtered.length === 0" class="stars-explorer__empty">
-          <p>{{ t('empty') }}</p>
-          <button type="button" class="stars-explorer__clear-btn" @click="store.clearAllFilters">
-            {{ t('clearFilters') }}
-          </button>
-        </div>
-        <div v-else ref="listViewportRef" class="stars-explorer__viewport">
-          <div
-            class="stars-explorer__virtual-spacer"
-            :style="{ height: `${virtualizer.getTotalSize()}px`, position: 'relative', width: '100%' }"
-          >
-            <div
-              v-for="row in virtualRows"
-              :key="String(row.key)"
-              :ref="measureRow"
-              class="stars-explorer__virtual-row"
-              :data-index="row.index"
-              :style="{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                transform: `translateY(${row.start}px)`,
-              }"
-            >
-              <StarCard
-                :item="store.filtered[row.index]"
-                :item-index="row.index"
-                :show-language="store.showLanguage"
-                :show-stars-count="store.showStarsCount"
-                :show-license="store.showLicense"
-              />
-            </div>
-          </div>
-        </div>
+      <div class="stars-explorer__toolbar" :class="{ 'stars-explorer__toolbar--desktop-only': isMobile }">
+        <StarsActiveFilters v-if="store.hasActiveFilters" class="stars-explorer__toolbar-filters" />
+        <p
+          v-else
+          class="stars-explorer__count"
+          v-html="
+            t('filterCount', {
+              filtered: store.filtered.length.toLocaleString(),
+              total: store.total.toLocaleString(),
+            })
+          "
+        />
+        <StarsViewToggle />
       </div>
+
+      <div v-if="store.filtered.length === 0" class="stars-explorer__empty stars-explorer__empty--pane">
+        <p>{{ t('empty') }}</p>
+        <button type="button" class="stars-explorer__clear-btn" @click="store.clearAllFilters">
+          {{ t('clearFilters') }}
+        </button>
+      </div>
+
+      <StarsListPane v-else-if="store.viewMode === 'list'" />
+
+      <StarsGalaxyView
+        v-else-if="galaxyReady && showGalaxy"
+        :items="store.filtered"
+        :focus-id="store.galaxyFocus"
+        :is-mobile="isMobile"
+        @select="onGalaxySelect"
+      />
     </template>
   </div>
 </template>

@@ -8,6 +8,36 @@ import {
   mapLegacySort,
 } from '../utils/stars-filter';
 import { normalizeUiLocale, resolveUiLocale } from '../i18n';
+import { buildGalaxyIndexMap } from '../galaxy/layout-payload.js';
+
+const PAGE_TITLE_CACHE_KEY = 'stars-page-title';
+
+/** @type {string} */
+const DEFAULT_SITE_TITLE =
+  typeof __STARS_DEFAULT_SITE_TITLE__ === 'string' && __STARS_DEFAULT_SITE_TITLE__.trim()
+    ? __STARS_DEFAULT_SITE_TITLE__.trim()
+    : 'Stars';
+
+function readCachedPageTitle() {
+  try {
+    const cached = sessionStorage.getItem(PAGE_TITLE_CACHE_KEY);
+    return typeof cached === 'string' && cached.trim() ? cached.trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+function cachePageTitle(title) {
+  if (!title) return;
+  try {
+    sessionStorage.setItem(PAGE_TITLE_CACHE_KEY, title);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** @type {Promise<void> | null} */
+let bootstrapPromise = null;
 
 const payload = ref(null);
 const siteMeta = ref(null);
@@ -32,6 +62,9 @@ let rowRemeasureFn = () => {};
 let searchDebounceMs = 300;
 let configuredUiLocale = 'zh-CN';
 const expandedDescIds = ref(new Set());
+const viewMode = ref('list');
+const galaxyFocus = ref('');
+const galaxySelected = ref(null);
 
 export function registerStarsListScroller(fn) {
   scrollListFn = typeof fn === 'function' ? fn : () => {};
@@ -64,6 +97,7 @@ function collapseDescExpanded(id) {
 }
 
 function scrollListToTop() {
+  if (viewMode.value !== 'list') return;
   scrollListFn();
 }
 
@@ -115,6 +149,10 @@ function applyQuery() {
   if (starsSort) {
     sort.value = mapLegacySort(starsSort);
   }
+
+  const viewParam = params.get('stars-view');
+  viewMode.value = viewParam === 'galaxy' ? 'galaxy' : 'list';
+  galaxyFocus.value = params.get('stars-focus') || '';
 }
 
 function hasStarsFilterQuery() {
@@ -123,6 +161,11 @@ function hasStarsFilterQuery() {
   return ['stars-q', 'stars-lang', 'stars-license', 'stars-year', 'stars-type', 'stars-sort'].some(
     (key) => params.has(key)
   );
+}
+
+function hasStarsViewQuery() {
+  if (typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).has('stars-view');
 }
 
 function patchQueryParam(key, valueRef, allValue = 'all') {
@@ -221,6 +264,10 @@ function syncQuery() {
   if (starredYear.value !== 'all') params.set('stars-year', starredYear.value);
   if (type.value !== 'all') params.set('stars-type', type.value);
   if (sort.value !== 'recently_starred') params.set('stars-sort', sort.value);
+  if (viewMode.value === 'galaxy') params.set('stars-view', 'galaxy');
+  else params.delete('stars-view');
+  if (galaxyFocus.value) params.set('stars-focus', galaxyFocus.value);
+  else params.delete('stars-focus');
   const qs = params.toString();
   const path = currentPathname();
   window.history.replaceState({}, '', `${path}${qs ? `?${qs}` : ''}`);
@@ -238,6 +285,7 @@ function persistSession() {
         type: type.value,
         sort: sort.value,
         uiLocale: uiLocale.value,
+        viewMode: viewMode.value,
       })
     );
   } catch {
@@ -260,6 +308,9 @@ function restoreSession() {
     if (saved.type) type.value = saved.type;
     if (saved.sort) sort.value = saved.sort;
     if (saved.uiLocale) uiLocale.value = saved.uiLocale;
+    if (!hasStarsViewQuery() && (saved.viewMode === 'galaxy' || saved.viewMode === 'list')) {
+      viewMode.value = saved.viewMode;
+    }
   } catch {
     /* ignore */
   }
@@ -276,7 +327,6 @@ async function loadSiteMeta() {
 }
 
 async function loadData() {
-  loading.value = true;
   error.value = '';
   try {
     const base = import.meta.env.BASE_URL || '/';
@@ -293,8 +343,6 @@ async function loadData() {
     if (ui.searchDebounceMs) searchDebounceMs = ui.searchDebounceMs;
   } catch (e) {
     error.value = e.message || 'Error';
-  } finally {
-    loading.value = false;
   }
 }
 
@@ -351,10 +399,24 @@ export function useStarsStore() {
     () => payload.value?.repoName || siteMeta.value?.repoName || 'stars'
   );
   const generatedAt = computed(() => payload.value?.generatedAt || siteMeta.value?.generatedAt || '');
-  const pageTitle = computed(
-    () => siteMeta.value?.title || (owner.value ? `GitHub Stars - ${owner.value}` : 'GitHub Stars')
-  );
+  const pageTitle = computed(() => {
+    const fromMeta = siteMeta.value?.title;
+    const fromPayload = payload.value?.ui?.siteName;
+    const title =
+      (typeof fromMeta === 'string' && fromMeta.trim()) ||
+      (typeof fromPayload === 'string' && fromPayload.trim()) ||
+      '';
+    if (title) {
+      cachePageTitle(title);
+      return title;
+    }
+    const cached = readCachedPageTitle();
+    if (cached) return cached;
+    return DEFAULT_SITE_TITLE;
+  });
   const stats = computed(() => payload.value?.stats || null);
+  const galaxyLayout = computed(() => payload.value?.galaxy ?? null);
+  const galaxyIndexMap = computed(() => buildGalaxyIndexMap(items.value));
 
   const languageOptions = computed(() =>
     buildLanguageOptions(filterStars(items.value, currentFilterState({ language: 'all' })))
@@ -377,6 +439,31 @@ export function useStarsStore() {
       type.value !== 'all'
   );
 
+  function setViewMode(mode) {
+    viewMode.value = mode === 'galaxy' ? 'galaxy' : 'list';
+    if (viewMode.value === 'list') {
+      galaxySelected.value = null;
+    }
+    persistSession();
+    syncQuery();
+    scrollListToTop();
+  }
+
+  function selectGalaxyItem(item) {
+    if (!item?.id) return;
+    galaxySelected.value = item;
+    galaxyFocus.value = item.id;
+    persistSession();
+    syncQuery();
+  }
+
+  function closeGalaxyDetail() {
+    galaxySelected.value = null;
+    galaxyFocus.value = '';
+    persistSession();
+    syncQuery();
+  }
+
   function clearFilterKey(key) {
     if (key === 'type') {
       type.value = 'all';
@@ -391,14 +478,24 @@ export function useStarsStore() {
   }
 
   async function bootstrap() {
-    await Promise.all([loadSiteMeta(), loadData()]);
-    const ui = payload.value?.ui || {};
-    if (ui.defaultSort && !hasStarsFilterQuery()) {
-      const params = new URLSearchParams(window.location.search);
-      if (!params.has('stars-sort')) sort.value = mapLegacySort(ui.defaultSort);
-    }
-    applyQuery();
-    if (!hasStarsFilterQuery()) restoreSession();
+    if (bootstrapPromise) return bootstrapPromise;
+    bootstrapPromise = (async () => {
+      loading.value = true;
+      error.value = '';
+      try {
+        await Promise.all([loadSiteMeta(), loadData()]);
+        const ui = payload.value?.ui || {};
+        if (ui.defaultSort && !hasStarsFilterQuery()) {
+          const params = new URLSearchParams(window.location.search);
+          if (!params.has('stars-sort')) sort.value = mapLegacySort(ui.defaultSort);
+        }
+        applyQuery();
+        if (!hasStarsFilterQuery()) restoreSession();
+      } finally {
+        loading.value = false;
+      }
+    })();
+    return bootstrapPromise;
   }
 
   function onPopState() {
@@ -420,6 +517,8 @@ export function useStarsStore() {
     type,
     sort,
     stats,
+    galaxyLayout,
+    galaxyIndexMap,
     licenseOptions,
     yearOptions,
     showLanguage,
@@ -436,6 +535,12 @@ export function useStarsStore() {
     hasActiveFilters,
     clearFilterKey,
     filtered,
+    viewMode,
+    galaxyFocus,
+    galaxySelected,
+    setViewMode,
+    selectGalaxyItem,
+    closeGalaxyDetail,
     bootstrap,
     onSearch,
     onPopState,

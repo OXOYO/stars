@@ -7,6 +7,15 @@ import { defineConfig } from 'vite';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoSlug = (process.env.REPO_NAME || 'stars').replace(/^\/+|\/+$/g, '');
 
+function readToolVersion() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+    return typeof pkg.version === 'string' ? pkg.version : '';
+  } catch {
+    return '';
+  }
+}
+
 function loadDeployConfig() {
   const configPath = path.join(__dirname, '..', 'config.json');
   try {
@@ -34,12 +43,27 @@ function resolvePagesBase() {
   return `/${slug}/`;
 }
 
+function readSiteName() {
+  try {
+    const config = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config.json'), 'utf8'));
+    const name = config?.pageConfig?.siteName;
+    return typeof name === 'string' && name.trim() ? name.trim() : 'Stars';
+  } catch {
+    return 'Stars';
+  }
+}
+
+const defaultSiteTitle = readSiteName();
 const base = resolvePagesBase();
 
 export default defineConfig({
   root: __dirname,
   base,
   publicDir: path.join(__dirname, 'public'),
+  define: {
+    __STARS_TOOL_VERSION__: JSON.stringify(readToolVersion()),
+    __STARS_DEFAULT_SITE_TITLE__: JSON.stringify(defaultSiteTitle),
+  },
   server: {
     host: true,
     port: Number(process.env.PORT) || 4173,
@@ -49,5 +73,13 @@ export default defineConfig({
     outDir: path.join(__dirname, 'dist'),
     emptyOutDir: true,
   },
-  plugins: [vue()],
+  plugins: [
+    vue(),
+    {
+      name: 'stars-inject-site-title',
+      transformIndexHtml(html) {
+        return html.replace(/<title>.*?<\/title>/, `<title>${defaultSiteTitle}</title>`);
+      },
+    },
+  ],
 });

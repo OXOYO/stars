@@ -3,6 +3,8 @@ import { computed } from 'vue';
 import { useStarsStore } from '../composables/useStarsStore';
 import { useStarsI18n } from '../composables/useStarsI18n';
 
+import StarsViewToggle from './StarsViewToggle.vue';
+
 const emit = defineEmits(['open-filters']);
 
 const store = useStarsStore();
@@ -36,6 +38,7 @@ const filterLabel = computed(() => {
       </svg>
       {{ filterLabel }}
     </button>
+    <StarsViewToggle />
     <p
       v-if="!store.loading && !store.error"
       class="stars-mobile-toolbar__count"

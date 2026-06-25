@@ -321,7 +321,7 @@ function computeStats(items) {
   };
 }
 
-function writeStarsJson(stars, owner, repoName, generatedAt) {
+function writeStarsJson(stars, owner, repoName, generatedAt, galaxy) {
   const defaultSort = mapLegacySort(config.pageConfig.defaultSort || 'recently_starred');
   const items = stars.map(normalizeStarItem);
   const payload = {
@@ -331,6 +331,7 @@ function writeStarsJson(stars, owner, repoName, generatedAt) {
     total: items.length,
     stats: computeStats(items),
     ui: {
+      siteName: config.pageConfig.siteName || 'Stars',
       defaultSort,
       defaultUiLocale: normalizeUiLocale(config.pageConfig.defaultUiLocale),
       virtualRowHeight: config.pageConfig.virtualRowHeight || 140,
@@ -340,9 +341,20 @@ function writeStarsJson(stars, owner, repoName, generatedAt) {
       showLicense: config.pageConfig.showLicense !== false,
     },
     items,
+    galaxy: galaxy || null,
   };
   fs.mkdirSync(path.dirname(STARS_JSON_PATH), { recursive: true });
   fs.writeFileSync(STARS_JSON_PATH, JSON.stringify(payload), 'utf8');
+}
+
+async function computeGalaxyLayoutForItems(items) {
+  if (!items.length) return null;
+  const started = Date.now();
+  const { computeGalaxyLayout } = await import('./scripts/compute-galaxy-layout.mjs');
+  const galaxy = computeGalaxyLayout(items);
+  const sec = ((Date.now() - started) / 1000).toFixed(1);
+  console.log(`🌌 星云力导向布局已预计算（${sec}s，${items.length} 颗星）`);
+  return galaxy;
 }
 
 function readToolVersion() {
@@ -399,7 +411,14 @@ async function main() {
     console.log(`🔍 开始拉取 @${owner} 的 Star 列表…`);
     const stars = await fetchStars(owner);
     const generatedAt = new Date().toISOString();
-    writeStarsJson(stars, owner, repoName, generatedAt);
+    const items = stars.map(normalizeStarItem);
+    let galaxy = null;
+    try {
+      galaxy = await computeGalaxyLayoutForItems(items);
+    } catch (layoutError) {
+      console.warn('⚠️  星云布局预计算失败，前端将回退为实时计算：', layoutError.message || layoutError);
+    }
+    writeStarsJson(stars, owner, repoName, generatedAt, galaxy);
     writeSiteJson(owner, repoName, generatedAt);
     console.log(`✅ 已生成 web/public/stars.json（${stars.length} 个仓库）与 site.json`);
   } catch (error) {

@@ -12,8 +12,8 @@ const props = defineProps({
   isMobile: { type: Boolean, default: false },
 });
 
-function readStatsExpanded(isMobileViewport) {
-  if (typeof sessionStorage === 'undefined') return !isMobileViewport;
+function readStatsExpanded() {
+  if (typeof sessionStorage === 'undefined') return false;
   try {
     const v = sessionStorage.getItem(STATS_EXPANDED_KEY);
     if (v === '0') return false;
@@ -21,16 +21,12 @@ function readStatsExpanded(isMobileViewport) {
   } catch {
     /* ignore */
   }
-  return !isMobileViewport;
+  return false;
 }
 
 const store = useStarsStore();
 const { t } = useStarsI18n();
-const expanded = ref(
-  readStatsExpanded(
-    typeof window !== 'undefined' ? window.matchMedia(MOBILE_MEDIA).matches : false
-  )
-);
+const expanded = ref(readStatsExpanded());
 
 const stats = computed(() => store.stats);
 const showOverlay = computed(() => store.hasActiveFilters);
