@@ -1,12 +1,13 @@
 /**
- * GitHub 用户/组织头像（比 API 返回的 u/id 链接更稳，兼容 Pages 与本地 dev）
+ * GitHub 用户/组织头像（直连 avatars CDN，避免 github.com/*.png 302）
  * @param {string} owner
  * @param {number} [size]
  */
 export function githubOwnerAvatarUrl(owner, size = 80) {
   const name = (owner || '').trim();
   if (!name) return '';
-  return `https://github.com/${encodeURIComponent(name)}.png?size=${size}`;
+  const px = Math.max(16, Math.min(512, Number(size) || 80));
+  return `https://avatars.githubusercontent.com/${encodeURIComponent(name)}?s=${px}&v=4`;
 }
 
 /** 用户或组织主页 */

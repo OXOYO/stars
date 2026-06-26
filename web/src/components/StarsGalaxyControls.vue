@@ -6,6 +6,8 @@ defineProps({
   showLegend: { type: Boolean, default: false },
   showFocusCenter: { type: Boolean, default: true },
   showFocusOwner: { type: Boolean, default: false },
+  showFullscreen: { type: Boolean, default: true },
+  isFullscreen: { type: Boolean, default: false },
 });
 
 const emit = defineEmits([
@@ -16,6 +18,7 @@ const emit = defineEmits([
   'toggle-legend',
   'focus-center',
   'focus-owner',
+  'toggle-fullscreen',
 ]);
 
 const { t } = useStarsI18n();
@@ -91,6 +94,50 @@ const { t } = useStarsI18n();
       >
         <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
         <circle cx="12" cy="7" r="4" />
+      </svg>
+    </button>
+    <button
+      v-if="showFullscreen"
+      type="button"
+      class="stars-galaxy-controls__btn"
+      :class="{ 'is-active': isFullscreen }"
+      :aria-pressed="isFullscreen"
+      :title="isFullscreen ? t('galaxyFullscreenExit') : t('galaxyFullscreenEnter')"
+      @click="emit('toggle-fullscreen')"
+    >
+      <svg
+        v-if="!isFullscreen"
+        viewBox="0 0 24 24"
+        width="14"
+        height="14"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M15 3h6v6" />
+        <path d="M9 21H3v-6" />
+        <path d="M21 3l-7 7" />
+        <path d="M3 21l7-7" />
+      </svg>
+      <svg
+        v-else
+        viewBox="0 0 24 24"
+        width="14"
+        height="14"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M4 14h6v6" />
+        <path d="M20 10h-6V4" />
+        <path d="M14 20v-6h6" />
+        <path d="M10 4v6H4" />
       </svg>
     </button>
     <button

@@ -56,6 +56,19 @@ function readSiteName() {
 const defaultSiteTitle = readSiteName();
 const base = resolvePagesBase();
 
+/** app.css 体量大，Vite CSS HMR 偶发把样式更新成空字符串，导致页面「裸奔」布局 */
+function starsCssFullReload() {
+  return {
+    name: 'stars-css-full-reload',
+    handleHotUpdate({ file, server }) {
+      if (file.replace(/\\/g, '/').endsWith('/src/styles/app.css')) {
+        server.ws.send({ type: 'full-reload', path: '*' });
+        return [];
+      }
+    },
+  };
+}
+
 export default defineConfig({
   root: __dirname,
   base,
@@ -75,6 +88,7 @@ export default defineConfig({
   },
   plugins: [
     vue(),
+    starsCssFullReload(),
     {
       name: 'stars-inject-site-title',
       transformIndexHtml(html) {

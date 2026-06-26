@@ -20,7 +20,7 @@ const virtualizer = useVirtualizer(
     count: store.filtered.length,
     getScrollElement: () => listViewportRef.value,
     estimateSize: () => store.virtualRowHeight,
-    overscan: 8,
+    overscan: 4,
     shouldAdjustScrollPositionOnItemSizeChange: () => false,
   }))
 );

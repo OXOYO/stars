@@ -4,7 +4,14 @@ import {
   findAnchorIndex,
   pairSimilarity,
   prepareForceNodes,
+  prepareForceNodesFromVirtualStars,
+  findAnchorRepoId,
+  findVirtualStarAnchorIndex,
 } from './force-similarity.js';
+
+function hashUnit(h, shift = 0) {
+  return ((h >>> shift) & 0xfffffff) / 0xfffffff;
+}
 
 /**
  * @typedef {{ i: number, j: number, w: number, sameLang: boolean }} ForceEdge
@@ -58,6 +65,8 @@ function buildLangClusterMeta(nodes, cfg) {
   const langs = [];
   /** @type {Int16Array} */
   const langIndex = new Int16Array(nodes.length);
+  /** @type {Map<string, number>} */
+  const langCounts = new Map();
   /** @type {number[][]} */
   const langCenters = [];
 
@@ -66,19 +75,28 @@ function buildLangClusterMeta(nodes, cfg) {
     if (!langToIdx.has(lang)) {
       langToIdx.set(lang, langs.length);
       langs.push(lang);
+      langCounts.set(lang, 0);
     }
     langIndex[i] = langToIdx.get(lang);
+    langCounts.set(lang, langCounts.get(lang) + 1);
   }
 
   const golden = Math.PI * (3 - Math.sqrt(5));
   const R = cfg.INIT_CLUSTER_RADIUS;
+  const diskY = cfg.DISK_THICKNESS ?? 6;
+  const total = Math.max(nodes.length, 1);
+
   langs.forEach((lang, li) => {
-    const phi = Math.acos(1 - 2 * (li + 0.5) / Math.max(langs.length, 1));
-    const theta = li * golden * 2.618 - Math.PI / 2;
+    const count = langCounts.get(lang) || 1;
+    const share = count / total;
+    const ang = li * golden * 2.4 - Math.PI / 2;
+    const r = R * (0.38 + Math.sqrt(share) * 0.62);
+    const lh = hashStr(`lang-cluster:${lang}`);
+    const rJitter = (hashUnit(lh, 8) - 0.5) * R * 0.07;
     langCenters[li] = [
-      R * Math.sin(phi) * Math.cos(theta),
-      R * Math.cos(phi) * 0.68,
-      R * Math.sin(phi) * Math.sin(theta),
+      Math.cos(ang) * (r + rJitter),
+      gauss3(hashSeed(lh, 'y1'), hashSeed(lh, 'y2'), hashSeed(lh, 'y3')) * diskY * 0.14,
+      Math.sin(ang) * (r + rJitter),
     ];
   });
 
@@ -99,7 +117,7 @@ function buildEdges(nodes, anchorIndex, langIndex, cfg) {
   /** @type {Map<string, number[]>} */
   const langBuckets = new Map();
   /** @type {Map<string, number[]>} */
-  const topicIndex = new Map();
+  const langTopicIndex = new Map();
 
   for (let i = 0; i < n; i += 1) {
     const lang = String(nodes[i].language || '其他');
@@ -107,8 +125,9 @@ function buildEdges(nodes, anchorIndex, langIndex, cfg) {
     langBuckets.get(lang).push(i);
 
     for (const topic of nodes[i].topics) {
-      if (!topicIndex.has(topic)) topicIndex.set(topic, []);
-      topicIndex.get(topic).push(i);
+      const langTopic = `${lang}\0${topic}`;
+      if (!langTopicIndex.has(langTopic)) langTopicIndex.set(langTopic, []);
+      langTopicIndex.get(langTopic).push(i);
     }
   }
 
@@ -148,7 +167,8 @@ function buildEdges(nodes, anchorIndex, langIndex, cfg) {
     /** @type {Set<number>} */
     const topicPeers = new Set();
     for (const topic of nodes[i].topics) {
-      const peers = topicIndex.get(topic) || [];
+      const langTopic = `${lang}\0${topic}`;
+      const peers = langTopicIndex.get(langTopic) || [];
       if (peers.length <= cfg.TOPIC_PEER_MAX) {
         for (const j of peers) {
           if (j !== i) topicPeers.add(j);
@@ -181,6 +201,90 @@ function buildEdges(nodes, anchorIndex, langIndex, cfg) {
   }
 
   return edges;
+}
+
+/**
+ * 星团内建边：仅同 topic 互连，避免不同 topic 被语言相似度弹簧拽到一起
+ * @param {ReturnType<typeof prepareForceNodes>} nodes
+ * @param {number} anchorIndex
+ * @param {typeof FORCE_LAYOUT} cfg
+ * @returns {ForceEdge[]}
+ */
+function buildSameTopicEdges(nodes, anchorIndex, cfg) {
+  const n = nodes.length;
+  if (n <= 1) return [];
+
+  /** @type {Map<string, number[]>} */
+  const topicBuckets = new Map();
+  for (let i = 0; i < n; i += 1) {
+    const topics = nodes[i].topics;
+    const key = topics.size ? [...topics][0] : '__none__';
+    if (!topicBuckets.has(key)) topicBuckets.set(key, []);
+    topicBuckets.get(key).push(i);
+  }
+
+  const simCtx = {
+    weights: cfg.WEIGHTS,
+    timeTauDays: cfg.TIME_TAU_DAYS,
+  };
+
+  /** @type {ForceEdge[]} */
+  const edges = [];
+  /** @type {Set<string>} */
+  const seen = new Set();
+
+  const addEdge = (i, j, w) => {
+    if (i === j || w < cfg.SIM_THRESHOLD) return;
+    const a = Math.min(i, j);
+    const b = Math.max(i, j);
+    const key = `${a}:${b}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    edges.push({ i: a, j: b, w, sameLang: true });
+  };
+
+  for (let i = 0; i < n; i += 1) {
+    /** @type {Map<number, number>} */
+    const scores = new Map();
+    const topics = nodes[i].topics;
+    const bucketKey = topics.size ? [...topics][0] : '__none__';
+    const bucket = topicBuckets.get(bucketKey) || [];
+
+    for (const j of sampleBucketIndices(bucket, i, cfg.TOPIC_PEER_MAX)) {
+      const s = pairSimilarity(nodes[i], nodes[j], simCtx);
+      if (s > scores.get(j) || !scores.has(j)) scores.set(j, s);
+    }
+
+    if (anchorIndex >= 0 && anchorIndex !== i) {
+      const s = pairSimilarity(nodes[i], nodes[anchorIndex], simCtx);
+      const prev = scores.get(anchorIndex);
+      if (prev == null || s > prev) scores.set(anchorIndex, Math.max(s, 0.2));
+    }
+
+    const ranked = [...scores.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, cfg.NEIGHBOR_K);
+    for (const [j, w] of ranked) {
+      addEdge(i, j, w);
+    }
+  }
+
+  return edges;
+}
+
+/** @param {ReturnType<typeof prepareForceNodes>} nodes */
+function buildTopicGroupIndex(nodes) {
+  const topicIndex = new Int16Array(nodes.length);
+  /** @type {Map<string, number>} */
+  const map = new Map();
+  let next = 0;
+  for (let i = 0; i < nodes.length; i += 1) {
+    const topics = nodes[i].topics;
+    const key = topics.size ? [...topics][0] : '__none__';
+    if (!map.has(key)) map.set(key, next++);
+    topicIndex[i] = map.get(key);
+  }
+  return topicIndex;
 }
 
 /**
@@ -418,6 +522,13 @@ function applyLangClusterPull(
   }
 }
 
+function flattenDisk(positions, n, factor) {
+  const yScale = Math.max(0.12, Math.min(1, factor));
+  for (let i = 0; i < n; i += 1) {
+    positions[i * 3 + 1] *= yScale;
+  }
+}
+
 /**
  * @param {Float32Array} positions
  * @param {number} n
@@ -447,9 +558,21 @@ function normalizeSpan(positions, n, targetSpan) {
  */
 function resolveLayoutConfig(n, overrides = {}) {
   const cfg = { ...FORCE_LAYOUT, ...overrides };
-  cfg.REPULSION_MAX_NEIGHBORS = 0;
+  if (overrides.REPULSION_MAX_NEIGHBORS == null) {
+    cfg.REPULSION_MAX_NEIGHBORS = 0;
+  }
 
-  if (n > 2500) {
+  if (n > 12000) {
+    cfg.STEPS = Math.min(cfg.STEPS, 84);
+    cfg.CELL_SIZE = 30;
+    cfg.LANG_BUCKET_MAX = Math.min(cfg.LANG_BUCKET_MAX, 22);
+    cfg.TOPIC_PEER_MAX = Math.max(cfg.TOPIC_PEER_MAX, 36);
+    cfg.NEIGHBOR_K = Math.min(cfg.NEIGHBOR_K, 12);
+    if (overrides.REPULSION_MAX_NEIGHBORS == null) {
+      cfg.REPULSION_MAX_NEIGHBORS = 28;
+    }
+    cfg.TARGET_SPAN = Math.max(cfg.TARGET_SPAN, 128);
+  } else if (n > 2500) {
     cfg.STEPS = Math.min(cfg.STEPS, 120);
     cfg.CELL_SIZE = 22;
     cfg.LANG_BUCKET_MAX = Math.min(cfg.LANG_BUCKET_MAX, 36);
@@ -462,13 +585,13 @@ function resolveLayoutConfig(n, overrides = {}) {
 }
 
 /**
- * 3D 力导向布局：位置仅由仿真决定
- * @param {Array<object>} items
+ * @param {ReturnType<typeof prepareForceNodes>} nodes
+ * @param {Array<object>} list
+ * @param {number} anchorIndex
  * @param {Partial<typeof FORCE_LAYOUT>} [overrides]
  */
-export function runForceLayout3D(items, overrides = {}) {
-  const list = items || [];
-  const n = list.length;
+function runForceSimulation3D(nodes, list, anchorIndex, overrides = {}) {
+  const n = nodes.length;
   const cfg = resolveLayoutConfig(n, overrides);
   const positions = new Float32Array(n * 3);
 
@@ -476,8 +599,6 @@ export function runForceLayout3D(items, overrides = {}) {
     return { positions, anchorIndex: -1, edges: [] };
   }
 
-  const nodes = prepareForceNodes(list);
-  const anchorIndex = findAnchorIndex(nodes);
   const { langIndex, langCenters } = buildLangClusterMeta(nodes, cfg);
   const edges = buildEdges(nodes, anchorIndex, langIndex, cfg);
 
@@ -490,10 +611,10 @@ export function runForceLayout3D(items, overrides = {}) {
     }
     const li = langIndex[i];
     const center = langCenters[li] || [0, 0, 0];
-    const h = hashStr(list[i].id || list[i].fullName || String(i));
+    const h = hashStr(String(nodes[i].id || list[i]?.id || i));
     const jitter = 7.5 + (hashSeed(h, 'j') % 1000) / 1000 * 5;
     positions[i * 3] = center[0] + gauss3(h, h >>> 3, h >>> 7) * jitter;
-    positions[i * 3 + 1] = center[1] + gauss3(h >>> 4, h >>> 8, h >>> 12) * jitter * 0.85;
+    positions[i * 3 + 1] = center[1] + gauss3(h >>> 4, h >>> 8, h >>> 12) * jitter * 0.38;
     positions[i * 3 + 2] = center[2] + gauss3(h >>> 5, h >>> 9, h >>> 13) * jitter;
   }
 
@@ -588,10 +709,210 @@ export function runForceLayout3D(items, overrides = {}) {
   }
 
   normalizeSpan(positions, n, cfg.TARGET_SPAN);
+  flattenDisk(positions, n, cfg.DISK_FLATTEN ?? 0.28);
 
   positions[anchorIndex * 3] = 0;
   positions[anchorIndex * 3 + 1] = 0;
   positions[anchorIndex * 3 + 2] = 0;
 
   return { positions, anchorIndex, edges, anchorItem: list[anchorIndex] };
+}
+
+/**
+ * 星团内星级力导向：topic 环 + 云团星点在同一局部仿真里计算
+ * @param {ReturnType<typeof prepareForceNodes>} nodes
+ * @param {Float32Array} initialPositions 长度 n*3，作为初值
+ * @param {{
+ *   anchorIndex?: number,
+ *   clusterCenter?: [number, number, number] | null,
+ *   clusterPull?: number,
+ *   ringEdges?: ForceEdge[],
+ *   overrides?: Partial<typeof FORCE_LAYOUT>,
+ * }} [options]
+ */
+export function runIntraClusterForceSimulation(nodes, initialPositions, options = {}) {
+  const n = nodes.length;
+  if (n === 0) return new Float32Array(0);
+
+  const {
+    anchorIndex = -1,
+    clusterCenter = null,
+    clusterPull = 0,
+    ringEdges = [],
+    overrides = {},
+  } = options;
+
+  const cfg = resolveLayoutConfig(n, {
+    ...overrides,
+    CENTER_GRAVITY: overrides.CENTER_GRAVITY ?? 0,
+    LANG_CLUSTER_PULL: overrides.LANG_CLUSTER_PULL ?? 0,
+  });
+
+  const positions = new Float32Array(initialPositions);
+  const topicIndex = buildTopicGroupIndex(nodes);
+  const clusterCfg = {
+    ...cfg,
+    INTER_LANG_REPULSE: overrides.INTER_TOPIC_REPULSE ?? 3.6,
+  };
+  const edges = buildSameTopicEdges(nodes, anchorIndex, cfg);
+
+  const vx = new Float32Array(n);
+  const vy = new Float32Array(n);
+  const vz = new Float32Array(n);
+  const fx = new Float32Array(n);
+  const fy = new Float32Array(n);
+  const fz = new Float32Array(n);
+  /** @type {Map<string, number[]>} */
+  const grid = new Map();
+
+  const {
+    STEPS,
+    DT,
+    DAMPING,
+    REPULSION,
+    CELL_SIZE,
+    EARLY_STOP_MIN,
+    EARLY_STOP_V,
+  } = cfg;
+
+  for (let step = 0; step < STEPS; step += 1) {
+    fx.fill(0);
+    fy.fill(0);
+    fz.fill(0);
+
+    applyGridRepulsion(positions, n, CELL_SIZE, REPULSION, topicIndex, clusterCfg, fx, fy, fz, grid);
+    applySprings(edges, positions, cfg, fx, fy, fz);
+    applyRingChordSprings(ringEdges, positions, cfg, fx, fy, fz);
+
+    if (clusterCenter && clusterPull > 0) {
+      const pull = clusterPull * (1 - step / STEPS * 0.55);
+      applyClusterCenterPull(positions, n, clusterCenter, anchorIndex, pull, fx, fy, fz);
+    }
+
+    const cool = 1 - step / STEPS;
+    const dt = DT * (0.35 + cool * 0.65);
+    let maxSpeed = 0;
+
+    for (let i = 0; i < n; i += 1) {
+      if (i === anchorIndex) {
+        vx[i] = 0;
+        vy[i] = 0;
+        vz[i] = 0;
+        continue;
+      }
+
+      vx[i] = (vx[i] + fx[i] * dt) * DAMPING;
+      vy[i] = (vy[i] + fy[i] * dt) * DAMPING;
+      vz[i] = (vz[i] + fz[i] * dt) * DAMPING;
+
+      const speedCap = 10;
+      vx[i] = Math.max(-speedCap, Math.min(speedCap, vx[i]));
+      vy[i] = Math.max(-speedCap, Math.min(speedCap, vy[i]));
+      vz[i] = Math.max(-speedCap, Math.min(speedCap, vz[i]));
+
+      positions[i * 3] += vx[i];
+      positions[i * 3 + 1] += vy[i];
+      positions[i * 3 + 2] += vz[i];
+
+      maxSpeed = Math.max(
+        maxSpeed,
+        Math.abs(vx[i]) + Math.abs(vy[i]) + Math.abs(vz[i])
+      );
+    }
+
+    if (step >= EARLY_STOP_MIN && maxSpeed < EARLY_STOP_V) break;
+  }
+
+  const flatten = overrides.DISK_FLATTEN ?? overrides.STAR_VOLUME_KEEP ?? 1;
+  if (flatten < 0.95) {
+    if (clusterCenter) {
+      for (let i = 0; i < n; i += 1) {
+        positions[i * 3 + 1] =
+          clusterCenter[1] + (positions[i * 3 + 1] - clusterCenter[1]) * flatten;
+      }
+    } else {
+      flattenDisk(positions, n, flatten);
+    }
+  }
+
+  return positions;
+}
+
+function applyClusterCenterPull(
+  positions,
+  n,
+  center,
+  anchorIndex,
+  strength,
+  fx,
+  fy,
+  fz
+) {
+  for (let i = 0; i < n; i += 1) {
+    if (i === anchorIndex) continue;
+    fx[i] += (center[0] - positions[i * 3]) * strength;
+    fy[i] += (center[1] - positions[i * 3 + 1]) * strength * 0.42;
+    fz[i] += (center[2] - positions[i * 3 + 2]) * strength;
+  }
+}
+
+function applyRingChordSprings(ringEdges, positions, cfg, fx, fy, fz) {
+  if (!ringEdges.length) return;
+  const spring =
+    cfg.SPRING * cfg.INTRA_LANG_SPRING * (cfg.RING_SPRING_MULT ?? 1.35);
+  const rest = cfg.RING_REST_LENGTH ?? 9;
+
+  for (const { i, j } of ringEdges) {
+    let dx = positions[j * 3] - positions[i * 3];
+    let dy = positions[j * 3 + 1] - positions[i * 3 + 1];
+    let dz = positions[j * 3 + 2] - positions[i * 3 + 2];
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) + 0.02;
+    const f = spring * (dist - rest) / dist;
+    dx *= f;
+    dy *= f;
+    dz *= f;
+    fx[i] += dx;
+    fy[i] += dy;
+    fz[i] += dz;
+    fx[j] -= dx;
+    fy[j] -= dy;
+    fz[j] -= dz;
+  }
+}
+
+/**
+ * 3D 力导向布局：位置仅由仿真决定
+ * @param {Array<object>} items
+ * @param {Partial<typeof FORCE_LAYOUT>} [overrides]
+ */
+export function runForceLayout3D(items, overrides = {}) {
+  const list = items || [];
+  const n = list.length;
+
+  if (n === 0) {
+    return { positions: new Float32Array(0), anchorIndex: -1, edges: [] };
+  }
+
+  const nodes = prepareForceNodes(list);
+  const anchorIndex = findAnchorIndex(nodes);
+  return runForceSimulation3D(nodes, list, anchorIndex, overrides);
+}
+
+/**
+ * 对虚拟星（每 topic 一颗）直接做力导向
+ * @param {import('./virtual-stars.js').VirtualStar[]} virtualStars
+ * @param {string | null} [anchorRepoId]
+ * @param {Partial<typeof FORCE_LAYOUT>} [overrides]
+ */
+export function runForceLayout3DForVirtualStars(virtualStars, anchorRepoId = null, overrides = {}) {
+  const stars = virtualStars || [];
+  const n = stars.length;
+
+  if (n === 0) {
+    return { positions: new Float32Array(0), anchorIndex: -1, edges: [] };
+  }
+
+  const nodes = prepareForceNodesFromVirtualStars(stars);
+  const anchorIndex = findVirtualStarAnchorIndex(stars, anchorRepoId);
+  return runForceSimulation3D(nodes, stars, anchorIndex, overrides);
 }

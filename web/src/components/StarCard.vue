@@ -6,6 +6,7 @@ import { useStarsStore, requestStarsRowRemeasure, applyTopicSearch } from '../co
 import { langColor, langSlug } from '../utils/lang-colors';
 import { formatHomepageHost, formatRepoDate } from '../utils/format-date';
 import { githubOwnerAvatarUrl, githubOwnerProfileUrl } from '../utils/github-avatar';
+import { githubRepoUrl } from '../utils/github-repo';
 import { collapsedDescHasHiddenContent, measureDescOverflow } from '../utils/desc-overflow';
 
 const props = defineProps({
@@ -35,6 +36,7 @@ let resizeDebounceTimer;
 const owner = computed(() => props.item.fullName.split('/')[0] || '?');
 const ownerProfileUrl = computed(() => githubOwnerProfileUrl(owner.value));
 const repo = computed(() => props.item.fullName.split('/')[1] || props.item.fullName);
+const repoUrl = computed(() => props.item.url || githubRepoUrl(props.item.fullName));
 const avatarLetter = computed(() => (owner.value[0] || '?').toUpperCase());
 const langText = computed(() => props.item.language || t.value('otherLang'));
 const langAccent = computed(() => langColor(props.item.language || '其他'));
@@ -42,8 +44,12 @@ const langClass = computed(() => `lang--${langSlug(langText.value)}`);
 const hasLicense = computed(() => !!props.item.license);
 const hasLicenseLink = computed(() => !!(props.item.license && props.item.licenseUrl));
 const avatarFailed = ref(false);
+const avatarInView = ref(false);
 const avatarSrc = computed(() => githubOwnerAvatarUrl(owner.value, 80));
-const showAvatarImg = computed(() => !!avatarSrc.value && !avatarFailed.value);
+const showAvatarImg = computed(
+  () => avatarInView.value && !!avatarSrc.value && !avatarFailed.value
+);
+let avatarObserver;
 
 function scheduleDescOverflowMeasure() {
   if (measureRaf) cancelAnimationFrame(measureRaf);
@@ -109,6 +115,7 @@ watch(
   () => [props.item.id, rawDescription.value, locale.value],
   () => {
     avatarFailed.value = false;
+    avatarInView.value = false;
     scheduleDescOverflowMeasure();
   }
 );
@@ -124,9 +131,28 @@ onMounted(() => {
   scheduleDescOverflowMeasure();
   connectDescResizeObservers();
   unsubscribeLayoutResize = subscribeLayoutResize(scheduleDescOverflowMeasure);
+
+  const root = cardRef.value;
+  if (!root || typeof IntersectionObserver === 'undefined') {
+    avatarInView.value = true;
+    return;
+  }
+  avatarObserver = new IntersectionObserver(
+    ([entry]) => {
+      if (entry?.isIntersecting) {
+        avatarInView.value = true;
+        avatarObserver?.disconnect();
+        avatarObserver = undefined;
+      }
+    },
+    { rootMargin: '120px 0px', threshold: 0.01 }
+  );
+  avatarObserver.observe(root);
 });
 
 onUnmounted(() => {
+  avatarObserver?.disconnect();
+  avatarObserver = undefined;
   if (measureRaf) {
     cancelAnimationFrame(measureRaf);
     measureRaf = 0;
@@ -208,6 +234,7 @@ function formatShieldCount(n) {
         height="40"
         loading="lazy"
         decoding="async"
+        fetchpriority="low"
         referrerpolicy="no-referrer"
         @error="onAvatarError"
       />
@@ -219,7 +246,7 @@ function formatShieldCount(n) {
     <div class="star-card__body">
       <div class="star-card__head">
         <h3 class="star-card__title">
-          <a :href="item.url" target="_blank" rel="noreferrer">
+          <a :href="repoUrl" target="_blank" rel="noreferrer">
             <span class="star-card__owner">{{ owner }}</span>
             <span class="star-card__sep">/</span>
             <span class="star-card__repo">{{ repo }}</span>

@@ -3,7 +3,9 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { formatGeneratedAt } from './i18n';
 import { useStarsStore } from './composables/useStarsStore';
 import { useStarsI18n } from './composables/useStarsI18n';
+import { useStarsTheme } from './composables/useStarsTheme';
 import { MOBILE_MEDIA, useMediaQuery } from './composables/useMediaQuery';
+import { readSidebarCollapsedPref, writeSidebarCollapsedPref } from './storage/ui-prefs';
 import StarsNavSearch from './components/StarsNavSearch.vue';
 import StarsSidebarFilters from './components/StarsSidebarFilters.vue';
 import StarsSidebarLangNav from './components/StarsSidebarLangNav.vue';
@@ -14,22 +16,12 @@ const isMobile = useMediaQuery(MOBILE_MEDIA);
 const filtersSheetOpen = ref(false);
 const sidebarCollapsed = ref(false);
 
-const SIDEBAR_COLLAPSED_KEY = 'stars-sidebar-collapsed';
-
 function readSidebarCollapsed() {
-  try {
-    return sessionStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
-  } catch {
-    return false;
-  }
+  return readSidebarCollapsedPref();
 }
 
 function persistSidebarCollapsed() {
-  try {
-    sessionStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed.value ? '1' : '0');
-  } catch {
-    /* ignore */
-  }
+  writeSidebarCollapsedPref(sidebarCollapsed.value);
 }
 
 function toggleSidebarCollapsed() {
@@ -38,7 +30,13 @@ function toggleSidebarCollapsed() {
 }
 
 const store = useStarsStore();
+const galaxyMobile = computed(() => isMobile.value && store.viewMode === 'galaxy');
+
+watch(isMobile, (mobile) => {
+  if (mobile && store.galaxyAreaExpanded) store.setGalaxyAreaExpanded(false);
+});
 const { t, locale, basePath } = useStarsI18n();
+const { resolvedTheme, setColorTheme } = useStarsTheme();
 
 const siteTitle = computed(() => store.pageTitle);
 
@@ -100,7 +98,13 @@ watch(siteTitle, (title) => {
 </script>
 
 <template>
-  <div class="stars-app" :class="{ 'stars-app--mobile': isMobile }">
+  <div
+    class="stars-app"
+    :class="{
+      'stars-app--mobile': isMobile,
+      'stars-app--galaxy-mobile': galaxyMobile,
+    }"
+  >
     <header class="stars-app__header">
       <a
         class="stars-app__brand"
@@ -120,6 +124,42 @@ watch(siteTitle, (title) => {
       </a>
       <StarsNavSearch />
       <div class="stars-app__header-actions">
+        <div class="stars-app__theme" role="group" :aria-label="t('themeLabel')">
+          <button
+            type="button"
+            class="stars-app__theme-btn"
+            :class="{ 'is-active': resolvedTheme === 'light' }"
+            :aria-label="t('themeLight')"
+            @click="setColorTheme('light')"
+          >
+            <span class="stars-app__theme-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="m3.55 19.09l1.41 1.41l1.8-1.79l-1.42-1.42M12 6c-3.31 0-6 2.69-6 6s2.69 6 6 6s6-2.69 6-6c0-3.32-2.69-6-6-6m8 7h3v-2h-3m-2.76 7.71l1.8 1.79l1.41-1.41l-1.79-1.8M20.45 5l-1.41-1.4l-1.8 1.79l1.42 1.42M13 1h-2v3h2M6.76 5.39L4.96 3.6L3.55 5l1.79 1.81zM1 13h3v-2H1m12 9h-2v3h2"
+                />
+              </svg>
+            </span>
+            <span class="stars-app__theme-label">{{ t('themeLight') }}</span>
+          </button>
+          <button
+            type="button"
+            class="stars-app__theme-btn"
+            :class="{ 'is-active': resolvedTheme === 'dark' }"
+            :aria-label="t('themeDark')"
+            @click="setColorTheme('dark')"
+          >
+            <span class="stars-app__theme-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M2 12a10 10 0 0 0 13 9.54a10 10 0 0 1 0-19.08A10 10 0 0 0 2 12"
+                />
+              </svg>
+            </span>
+            <span class="stars-app__theme-label">{{ t('themeDark') }}</span>
+          </button>
+        </div>
         <div class="stars-app__lang" role="group" aria-label="UI language">
           <button
             type="button"

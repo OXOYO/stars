@@ -28,3 +28,9 @@ export function useMediaQuery(query) {
 }
 
 export const MOBILE_MEDIA = '(max-width: 768px)';
+
+/** 当前是否为移动端视口（与 MOBILE_MEDIA 一致） */
+export function isMobileViewport() {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia(MOBILE_MEDIA).matches;
+}

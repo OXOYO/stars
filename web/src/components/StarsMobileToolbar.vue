@@ -40,7 +40,7 @@ const filterLabel = computed(() => {
     </button>
     <StarsViewToggle />
     <p
-      v-if="!store.loading && !store.error"
+      v-if="!store.loading && !store.error && store.viewMode !== 'galaxy'"
       class="stars-mobile-toolbar__count"
       v-html="t('filterCount', { filtered: store.filtered.length.toLocaleString(), total: store.total.toLocaleString() })"
     />

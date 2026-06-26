@@ -8,7 +8,24 @@ import {
   mapLegacySort,
 } from '../utils/stars-filter';
 import { normalizeUiLocale, resolveUiLocale } from '../i18n';
-import { buildGalaxyIndexMap } from '../galaxy/layout-payload.js';
+import {
+  buildGalaxyIndexMap,
+  buildGalaxyVirtualIndexMap,
+  GALAXY_LAYOUT_CACHE_TAG,
+  GALAXY_LAYOUT_VERSION,
+  hasValidGalaxyLayout,
+  isVirtualGalaxyLayout,
+} from '../galaxy/layout-payload.js';
+import { expandReposToVirtualStars } from '../galaxy/virtual-stars.js';
+import {
+  readStoredUiLocale,
+  readStoredViewMode,
+  readStoredGalaxyAreaExpanded,
+  writeStoredUiLocale,
+  writeStoredViewMode,
+  writeStoredGalaxyAreaExpanded,
+} from '../storage/ui-prefs.js';
+import { isMobileViewport } from './useMediaQuery.js';
 
 const PAGE_TITLE_CACHE_KEY = 'stars-page-title';
 
@@ -65,6 +82,16 @@ const expandedDescIds = ref(new Set());
 const viewMode = ref('list');
 const galaxyFocus = ref('');
 const galaxySelected = ref(null);
+const galaxyAreaExpanded = ref(false);
+/** @type {import('vue').Ref<object | null>} */
+const galaxyLayoutPayload = ref(null);
+let galaxyLayoutPromise = null;
+/** 星云渲染诊断：布局版本、星点数、是否预计算 */
+const galaxyRenderStats = ref({
+  layoutVersion: 0,
+  pointCount: 0,
+  precomputed: false,
+});
 
 export function registerStarsListScroller(fn) {
   scrollListFn = typeof fn === 'function' ? fn : () => {};
@@ -106,11 +133,34 @@ function currentPathname() {
   return window.location.pathname || '/';
 }
 
+function hasStarsViewQuery() {
+  if (typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).has('stars-view');
+}
+
+function hasUiLocaleQuery() {
+  if (typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).has('lang');
+}
+
+function hasGalaxyExpandQuery() {
+  if (typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).has('stars-galaxy-expand');
+}
+
 function applyQuery() {
   if (typeof window === 'undefined') return;
   const params = new URLSearchParams(window.location.search);
 
-  uiLocale.value = resolveUiLocale(window.location.search, configuredUiLocale);
+  if (hasUiLocaleQuery()) {
+    uiLocale.value = resolveUiLocale(window.location.search, configuredUiLocale);
+    writeStoredUiLocale(uiLocale.value);
+  } else {
+    const storedLocale = readStoredUiLocale();
+    uiLocale.value = storedLocale
+      ? normalizeUiLocale(storedLocale)
+      : resolveUiLocale('', configuredUiLocale);
+  }
 
   if (params.has('stars-lang')) {
     language.value = params.get('stars-lang') || 'all';
@@ -151,8 +201,28 @@ function applyQuery() {
   }
 
   const viewParam = params.get('stars-view');
-  viewMode.value = viewParam === 'galaxy' ? 'galaxy' : 'list';
+  if (viewParam === 'galaxy') {
+    viewMode.value = 'galaxy';
+    writeStoredViewMode('galaxy');
+  } else if (hasStarsViewQuery()) {
+    viewMode.value = 'list';
+    writeStoredViewMode('list');
+  } else {
+    const storedView = readStoredViewMode();
+    viewMode.value = storedView === 'galaxy' ? 'galaxy' : 'list';
+  }
   galaxyFocus.value = params.get('stars-focus') || '';
+
+  const expandParam = params.get('stars-galaxy-expand');
+  if (expandParam === '1' && !isMobileViewport()) {
+    galaxyAreaExpanded.value = true;
+    writeStoredGalaxyAreaExpanded(true);
+  } else if (hasGalaxyExpandQuery() || isMobileViewport()) {
+    galaxyAreaExpanded.value = false;
+    writeStoredGalaxyAreaExpanded(false);
+  } else {
+    galaxyAreaExpanded.value = readStoredGalaxyAreaExpanded();
+  }
 }
 
 function hasStarsFilterQuery() {
@@ -161,11 +231,6 @@ function hasStarsFilterQuery() {
   return ['stars-q', 'stars-lang', 'stars-license', 'stars-year', 'stars-type', 'stars-sort'].some(
     (key) => params.has(key)
   );
-}
-
-function hasStarsViewQuery() {
-  if (typeof window === 'undefined') return false;
-  return new URLSearchParams(window.location.search).has('stars-view');
 }
 
 function patchQueryParam(key, valueRef, allValue = 'all') {
@@ -251,6 +316,7 @@ export function setUiLocale(locale) {
   const qs = params.toString();
   const path = currentPathname();
   window.history.replaceState({}, '', `${path}${qs ? `?${qs}` : ''}`);
+  writeStoredUiLocale(next);
   persistSession();
 }
 
@@ -268,6 +334,11 @@ function syncQuery() {
   else params.delete('stars-view');
   if (galaxyFocus.value) params.set('stars-focus', galaxyFocus.value);
   else params.delete('stars-focus');
+  if (viewMode.value === 'galaxy' && galaxyAreaExpanded.value) {
+    params.set('stars-galaxy-expand', '1');
+  } else {
+    params.delete('stars-galaxy-expand');
+  }
   const qs = params.toString();
   const path = currentPathname();
   window.history.replaceState({}, '', `${path}${qs ? `?${qs}` : ''}`);
@@ -284,8 +355,6 @@ function persistSession() {
         starredYear: starredYear.value,
         type: type.value,
         sort: sort.value,
-        uiLocale: uiLocale.value,
-        viewMode: viewMode.value,
       })
     );
   } catch {
@@ -307,10 +376,6 @@ function restoreSession() {
     if (saved.starredYear) starredYear.value = saved.starredYear;
     if (saved.type) type.value = saved.type;
     if (saved.sort) sort.value = saved.sort;
-    if (saved.uiLocale) uiLocale.value = saved.uiLocale;
-    if (!hasStarsViewQuery() && (saved.viewMode === 'galaxy' || saved.viewMode === 'list')) {
-      viewMode.value = saved.viewMode;
-    }
   } catch {
     /* ignore */
   }
@@ -324,6 +389,60 @@ async function loadSiteMeta() {
   } catch {
     siteMeta.value = null;
   }
+}
+
+function pickGalaxyLayoutPayload(remote, embedded) {
+  const remoteOk = hasValidGalaxyLayout(remote);
+  const embeddedOk = hasValidGalaxyLayout(embedded);
+  if (remoteOk && embeddedOk) {
+    const rv = remote.version ?? 0;
+    const ev = embedded.version ?? 0;
+    return rv >= ev ? remote : embedded;
+  }
+  if (remoteOk) return remote;
+  if (embeddedOk) return embedded;
+  return null;
+}
+
+async function loadGalaxyLayout() {
+  const base = import.meta.env.BASE_URL || '/';
+  const embedded = payload.value?.galaxy ?? null;
+  let remote = null;
+
+  try {
+    const res = await fetch(
+      `${base}galaxy.json?v=${GALAXY_LAYOUT_VERSION}-${GALAXY_LAYOUT_CACHE_TAG}`,
+      { cache: 'no-store' }
+    );
+    if (res.ok) remote = await res.json();
+  } catch {
+    /* ignore */
+  }
+
+  const picked = pickGalaxyLayoutPayload(remote, embedded);
+  if (picked) galaxyLayoutPayload.value = picked;
+  return picked;
+}
+
+export function ensureGalaxyLayout() {
+  const cached = galaxyLayoutPayload.value;
+  if (cached && isVirtualGalaxyLayout(cached)) {
+    return Promise.resolve(cached);
+  }
+  if (!galaxyLayoutPromise) {
+    galaxyLayoutPromise = loadGalaxyLayout().finally(() => {
+      galaxyLayoutPromise = null;
+    });
+  }
+  return galaxyLayoutPromise;
+}
+
+export function setGalaxyRenderStats(stats) {
+  galaxyRenderStats.value = {
+    layoutVersion: Number(stats?.layoutVersion) || 0,
+    pointCount: Number(stats?.pointCount) || 0,
+    precomputed: Boolean(stats?.precomputed),
+  };
 }
 
 async function loadData() {
@@ -415,8 +534,14 @@ export function useStarsStore() {
     return DEFAULT_SITE_TITLE;
   });
   const stats = computed(() => payload.value?.stats || null);
-  const galaxyLayout = computed(() => payload.value?.galaxy ?? null);
+  const galaxyLayout = computed(
+    () => galaxyLayoutPayload.value ?? payload.value?.galaxy ?? null
+  );
   const galaxyIndexMap = computed(() => buildGalaxyIndexMap(items.value));
+  const galaxyVirtualIndexMap = computed(() =>
+    buildGalaxyVirtualIndexMap(expandReposToVirtualStars(items.value))
+  );
+  const galaxyUsesVirtualLayout = computed(() => isVirtualGalaxyLayout(galaxyLayout.value));
 
   const languageOptions = computed(() =>
     buildLanguageOptions(filterStars(items.value, currentFilterState({ language: 'all' })))
@@ -443,10 +568,30 @@ export function useStarsStore() {
     viewMode.value = mode === 'galaxy' ? 'galaxy' : 'list';
     if (viewMode.value === 'list') {
       galaxySelected.value = null;
+    } else {
+      void ensureGalaxyLayout();
+      if (typeof window !== 'undefined' && !hasGalaxyExpandQuery()) {
+        galaxyAreaExpanded.value = isMobileViewport()
+          ? false
+          : readStoredGalaxyAreaExpanded();
+      }
     }
+    writeStoredViewMode(viewMode.value);
     persistSession();
     syncQuery();
     scrollListToTop();
+  }
+
+  function setGalaxyAreaExpanded(expanded) {
+    const next = isMobileViewport() ? false : Boolean(expanded);
+    galaxyAreaExpanded.value = next;
+    writeStoredGalaxyAreaExpanded(next);
+    syncQuery();
+  }
+
+  function toggleGalaxyAreaExpanded() {
+    if (isMobileViewport()) return;
+    setGalaxyAreaExpanded(!galaxyAreaExpanded.value);
   }
 
   function selectGalaxyItem(item) {
@@ -491,6 +636,7 @@ export function useStarsStore() {
         }
         applyQuery();
         if (!hasStarsFilterQuery()) restoreSession();
+        if (viewMode.value === 'galaxy') await ensureGalaxyLayout();
       } finally {
         loading.value = false;
       }
@@ -503,7 +649,7 @@ export function useStarsStore() {
     scrollListToTop();
   }
 
-  return reactive({
+  const store = reactive({
     uiLocale,
     loading,
     error,
@@ -516,29 +662,20 @@ export function useStarsStore() {
     starredYear,
     type,
     sort,
-    stats,
-    galaxyLayout,
-    galaxyIndexMap,
-    licenseOptions,
-    yearOptions,
+    galaxyRenderStats,
+    setGalaxyRenderStats,
     showLanguage,
     showStarsCount,
     showLicense,
     virtualRowHeight,
-    items,
-    total,
-    owner,
-    repoName,
-    generatedAt,
-    pageTitle,
-    languageOptions,
-    hasActiveFilters,
-    clearFilterKey,
-    filtered,
     viewMode,
     galaxyFocus,
     galaxySelected,
+    galaxyAreaExpanded,
     setViewMode,
+    setGalaxyAreaExpanded,
+    toggleGalaxyAreaExpanded,
+    ensureGalaxyLayout,
     selectGalaxyItem,
     closeGalaxyDetail,
     bootstrap,
@@ -551,10 +688,32 @@ export function useStarsStore() {
     patchLicenseInQuery,
     patchStarredYearInQuery,
     clearAllFilters,
+    clearFilterKey,
     isDescExpanded,
     toggleDescExpanded,
     collapseDescExpanded,
   });
+
+  Object.defineProperties(store, {
+    items: { get: () => items.value },
+    total: { get: () => total.value },
+    owner: { get: () => owner.value },
+    repoName: { get: () => repoName.value },
+    generatedAt: { get: () => generatedAt.value },
+    pageTitle: { get: () => pageTitle.value },
+    stats: { get: () => stats.value },
+    galaxyLayout: { get: () => galaxyLayout.value },
+    galaxyIndexMap: { get: () => galaxyIndexMap.value },
+    galaxyVirtualIndexMap: { get: () => galaxyVirtualIndexMap.value },
+    galaxyUsesVirtualLayout: { get: () => galaxyUsesVirtualLayout.value },
+    licenseOptions: { get: () => licenseOptions.value },
+    yearOptions: { get: () => yearOptions.value },
+    languageOptions: { get: () => languageOptions.value },
+    filtered: { get: () => filtered.value },
+    hasActiveFilters: { get: () => hasActiveFilters.value },
+  });
+
+  return store;
 }
 
 export function remeasureStarsList(virtualizer, viewportEl, itemIndex) {

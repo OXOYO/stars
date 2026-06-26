@@ -1,4 +1,4 @@
-import { langColor } from '../utils/lang-colors';
+import { langColor } from '../utils/lang-colors.js';
 
 /** @param {string} hex */
 export function hexToRgb(hex) {

@@ -35,10 +35,14 @@ function syncFocusSelection() {
 
 watch(
   () => store.viewMode,
-  (mode) => {
-    if (mode === 'galaxy') {
-      galaxyReady.value = true;
+  async (mode) => {
+    if (mode !== 'galaxy') {
+      galaxyReady.value = false;
+      return;
     }
+    await store.bootstrap();
+    await store.ensureGalaxyLayout();
+    galaxyReady.value = true;
   },
   { immediate: true }
 );
@@ -61,15 +65,24 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="stars-explorer">
+  <div
+    class="stars-explorer"
+    :class="{ 'stars-explorer--galaxy-mobile': isMobile && store.viewMode === 'galaxy' }"
+  >
     <p v-if="store.loading" class="stars-explorer__status">{{ t('loading') }}</p>
     <p v-else-if="store.error" class="stars-explorer__status stars-explorer__status--error">
       {{ t('loadError', { error: store.error }) }}
     </p>
     <template v-else>
       <StarsMobileToolbar v-if="isMobile" @open-filters="emit('open-filters')" />
-      <StarsStatsBar :is-mobile="isMobile" />
-      <div class="stars-explorer__toolbar" :class="{ 'stars-explorer__toolbar--desktop-only': isMobile }">
+      <StarsStatsBar
+        v-if="!isMobile || store.viewMode !== 'galaxy'"
+        :is-mobile="isMobile"
+      />
+      <div
+        class="stars-explorer__toolbar"
+        :class="{ 'stars-explorer__toolbar--desktop-only': isMobile }"
+      >
         <StarsActiveFilters v-if="store.hasActiveFilters" class="stars-explorer__toolbar-filters" />
         <p
           v-else

@@ -5,7 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="%BASE_URL%favicon.svg" type="image/svg+xml" />
     <link rel="icon" href="%BASE_URL%favicon.ico" sizes="32x32" />
+    <link rel="preconnect" href="https://avatars.githubusercontent.com" crossorigin />
+    <link rel="dns-prefetch" href="https://avatars.githubusercontent.com" />
+    <link rel="preload" href="%BASE_URL%stars.json" as="fetch" crossorigin />
     <title>Stars</title>
+    <script>
+      (function () {
+        try {
+          var p = localStorage.getItem('stars-color-theme');
+          var dark =
+            p === 'dark' ||
+            (p !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.dataset.starsTheme = dark ? 'dark' : 'light';
+        } catch (e) {}
+      })();
+    </script>
     <script>
       (function () {
         var path = location.pathname;

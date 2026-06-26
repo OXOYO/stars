@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { GALAXY_ZOOM } from './constants.js';
 import { motionWorldPosition } from './motion.js';
 
 const _world = new THREE.Vector3();
@@ -75,7 +76,13 @@ export function pickStarIndexScreen(opts) {
 
     const aSize = sizes ? sizes[i] : 1;
     const bright = brights ? brights[i] : 0.5;
-    const distScale = Math.max(4.5, Math.min(72, 300 / Math.max(-_mv.z, 3.2)));
+    const distScale = Math.max(
+      GALAXY_ZOOM.POINT_DIST_SCALE_MIN,
+      Math.min(
+        GALAXY_ZOOM.POINT_DIST_SCALE_MAX,
+        GALAXY_ZOOM.POINT_DIST_SCALE_DIV / Math.max(-_mv.z, GALAXY_ZOOM.POINT_VIEW_Z_MIN)
+      )
+    );
     const pixelSize = aSize * (0.58 + bright * 0.28) * pixelRatio * distScale;
     const pickR = Math.max(5, Math.min(22, pixelSize * 0.42));
 

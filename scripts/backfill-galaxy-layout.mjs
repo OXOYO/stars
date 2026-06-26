@@ -2,9 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { computeGalaxyLayout } from './compute-galaxy-layout.mjs';
+import { expandReposToVirtualStars } from '../web/src/galaxy/virtual-stars.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STARS_JSON_PATH = path.join(__dirname, '../web/public/stars.json');
+const GALAXY_JSON_PATH = path.join(__dirname, '../web/public/galaxy.json');
 
 if (!fs.existsSync(STARS_JSON_PATH)) {
   console.error('❌ 未找到 web/public/stars.json，请先运行 npm run generate');
@@ -19,8 +21,13 @@ if (!items.length) {
 }
 
 const started = Date.now();
-console.log(`🌌 正在为 ${items.length} 颗星预计算力导向布局…`);
-payload.galaxy = computeGalaxyLayout(items);
-fs.writeFileSync(STARS_JSON_PATH, JSON.stringify(payload), 'utf8');
+const virtualStars = expandReposToVirtualStars(items);
+console.log(`🌌 正在为 ${items.length} 个仓库 / ${virtualStars.length} 颗虚拟星预计算分层摆位…`);
+const galaxy = computeGalaxyLayout(items);
+fs.writeFileSync(GALAXY_JSON_PATH, JSON.stringify(galaxy), 'utf8');
+if (payload.galaxy) {
+  delete payload.galaxy;
+  fs.writeFileSync(STARS_JSON_PATH, JSON.stringify(payload), 'utf8');
+}
 const sec = ((Date.now() - started) / 1000).toFixed(1);
-console.log(`✅ 已写入 stars.json.galaxy（${sec}s）`);
+console.log(`✅ 已写入 galaxy.json（${sec}s）`);

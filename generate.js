@@ -6,6 +6,7 @@ const axios = require('axios');
 const ROOT = __dirname;
 const CONFIG_PATH = path.join(ROOT, 'config.json');
 const STARS_JSON_PATH = path.join(ROOT, 'web', 'public', 'stars.json');
+const GALAXY_JSON_PATH = path.join(ROOT, 'web', 'public', 'galaxy.json');
 const SITE_JSON_PATH = path.join(ROOT, 'web', 'public', 'site.json');
 const PACKAGE_JSON_PATH = path.join(ROOT, 'package.json');
 
@@ -238,12 +239,9 @@ function normalizeTopics(repo) {
 
 function normalizeStarItem(repo) {
   const { license, licenseUrl } = normalizeLicense(repo);
-  const owner = repo.owner && typeof repo.owner === 'object' ? repo.owner : null;
-  const ownerLogin = (repo.full_name || '').split('/')[0] || owner?.login || '';
   return {
     id: repoAnchor(repo.full_name),
     fullName: repo.full_name,
-    url: repo.html_url,
     description: repo.description || '',
     language: repo.language || null,
     license,
@@ -255,12 +253,32 @@ function normalizeStarItem(repo) {
     homepage: normalizeHomepage(repo.homepage),
     forksCount: Number(repo.forks_count) || 0,
     watchersCount: Number(repo.subscribers_count ?? repo.watchers_count) || 0,
-    avatarUrl: ownerLogin ? `https://github.com/${ownerLogin}.png` : null,
     topics: normalizeTopics(repo),
     fork: !!repo.fork,
-    private: !!repo.private,
     isTemplate: !!repo.is_template,
   };
+}
+
+/** 去掉空字段，减小 stars.json 体积 */
+function compactStarItem(item) {
+  const out = {
+    id: item.id,
+    fullName: item.fullName,
+    stars: item.stars,
+    starredAt: item.starredAt,
+    fork: item.fork,
+  };
+  if (item.description) out.description = item.description;
+  if (item.language) out.language = item.language;
+  if (item.license) out.license = item.license;
+  if (item.licenseUrl) out.licenseUrl = item.licenseUrl;
+  if (item.createdAt) out.createdAt = item.createdAt;
+  if (item.pushedAt) out.pushedAt = item.pushedAt;
+  if (item.homepage) out.homepage = item.homepage;
+  if (item.forksCount) out.forksCount = item.forksCount;
+  if (item.watchersCount) out.watchersCount = item.watchersCount;
+  if (item.topics?.length) out.topics = item.topics;
+  return out;
 }
 
 function computeStats(items) {
@@ -321,15 +339,16 @@ function computeStats(items) {
   };
 }
 
-function writeStarsJson(stars, owner, repoName, generatedAt, galaxy) {
+function writeStarsJson(stars, owner, repoName, generatedAt) {
   const defaultSort = mapLegacySort(config.pageConfig.defaultSort || 'recently_starred');
-  const items = stars.map(normalizeStarItem);
+  const normalized = stars.map(normalizeStarItem);
+  const items = normalized.map(compactStarItem);
   const payload = {
     generatedAt,
     owner,
     repoName,
     total: items.length,
-    stats: computeStats(items),
+    stats: computeStats(normalized),
     ui: {
       siteName: config.pageConfig.siteName || 'Stars',
       defaultSort,
@@ -341,10 +360,15 @@ function writeStarsJson(stars, owner, repoName, generatedAt, galaxy) {
       showLicense: config.pageConfig.showLicense !== false,
     },
     items,
-    galaxy: galaxy || null,
   };
   fs.mkdirSync(path.dirname(STARS_JSON_PATH), { recursive: true });
   fs.writeFileSync(STARS_JSON_PATH, JSON.stringify(payload), 'utf8');
+}
+
+function writeGalaxyJson(galaxy) {
+  if (!galaxy) return;
+  fs.mkdirSync(path.dirname(GALAXY_JSON_PATH), { recursive: true });
+  fs.writeFileSync(GALAXY_JSON_PATH, JSON.stringify(galaxy), 'utf8');
 }
 
 async function computeGalaxyLayoutForItems(items) {
@@ -353,7 +377,9 @@ async function computeGalaxyLayoutForItems(items) {
   const { computeGalaxyLayout } = await import('./scripts/compute-galaxy-layout.mjs');
   const galaxy = computeGalaxyLayout(items);
   const sec = ((Date.now() - started) / 1000).toFixed(1);
-  console.log(`🌌 星云力导向布局已预计算（${sec}s，${items.length} 颗星）`);
+  const virtualCount = galaxy?.positions?.length ? galaxy.positions.length / 3 : items.length;
+  const layoutTag = galaxy?.version === 3 ? `虚拟星 v${galaxy.version}` : `仓级 v${galaxy?.version ?? 2}`;
+  console.log(`🌌 星云布局已预计算（${sec}s，${virtualCount} 颗星，${layoutTag}）`);
   return galaxy;
 }
 
@@ -418,9 +444,10 @@ async function main() {
     } catch (layoutError) {
       console.warn('⚠️  星云布局预计算失败，前端将回退为实时计算：', layoutError.message || layoutError);
     }
-    writeStarsJson(stars, owner, repoName, generatedAt, galaxy);
+    writeStarsJson(stars, owner, repoName, generatedAt);
+    writeGalaxyJson(galaxy);
     writeSiteJson(owner, repoName, generatedAt);
-    console.log(`✅ 已生成 web/public/stars.json（${stars.length} 个仓库）与 site.json`);
+    console.log(`✅ 已生成 web/public/stars.json（${stars.length} 个仓库）、galaxy.json 与 site.json`);
   } catch (error) {
     console.error('❌ 失败：', formatGenerateError(error));
     process.exit(1);

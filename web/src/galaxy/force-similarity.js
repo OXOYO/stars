@@ -105,6 +105,46 @@ export function prepareForceNodes(items) {
 }
 
 /**
+ * 虚拟星节点：每颗星只带一个 topic（或无 topic）
+ * @param {import('./virtual-stars.js').VirtualStar[]} virtualStars
+ */
+export function prepareForceNodesFromVirtualStars(virtualStars) {
+  return (virtualStars || []).map((v) => ({
+    id: v.virtualKey,
+    language: v.language ?? null,
+    ms: parseStarredMs(v.item?.starredAt),
+    topics: v.topic ? new Set([v.topic]) : new Set(),
+    repoId: v.repoId,
+  }));
+}
+
+/**
+ * @param {Array<object>} items
+ */
+export function findAnchorRepoId(items) {
+  const list = items || [];
+  if (!list.length) return null;
+  const nodes = prepareForceNodes(list);
+  const idx = findAnchorIndex(nodes);
+  return list[idx]?.id ?? null;
+}
+
+/**
+ * @param {import('./virtual-stars.js').VirtualStar[]} virtualStars
+ * @param {string | null} anchorRepoId
+ */
+export function findVirtualStarAnchorIndex(virtualStars, anchorRepoId) {
+  const stars = virtualStars || [];
+  if (!stars.length) return 0;
+  if (anchorRepoId) {
+    for (let i = 0; i < stars.length; i += 1) {
+      if (stars[i].repoId === anchorRepoId) return i;
+    }
+  }
+  return findAnchorIndex(prepareForceNodesFromVirtualStars(stars));
+}
+
+/**
  * 最早 starred 的仓库索引（第一个关注）
  * @param {Array<{ ms: number | null }>} nodes
  */

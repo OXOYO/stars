@@ -4,6 +4,7 @@ node_modules/
 # Build & generated data
 web/dist/
 web/public/stars.json
+web/public/galaxy.json
 web/public/site.json
 
 # Environment & secrets
