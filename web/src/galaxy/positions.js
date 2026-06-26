@@ -9,43 +9,45 @@ import {
   TWINKLE_RANK_GAMMA,
   PARTICLE_VISUAL_WEIGHTS,
   PARTICLE_SIZE_RANGE,
+  PARTICLE_SIZE_WEIGHTS,
   PARTICLE_BRIGHT_RANGE,
-  FORCE_LAYOUT,
   COSMIC_UNIVERSE,
 } from './constants.js';
 import { gauss3, hashSeed, hashStr, hashUnit } from './hash.js';
-import { repoLangRgb } from './colors.js';
+import { repoLangRgb, stellarTempRgb, blendCosmicColor, nebulaLangTint, nebulaDustRgb } from './colors.js';
 import { buildMotionFields, buildHarmonizedLanguageHubs, buildHarmonizedRawLanguageHubs, fillGasMotionFields } from './motion.js';
 import { findAnchorRepoId } from './force-similarity.js';
 import {
-  extractLayoutPositions,
   extractVirtualLayoutPositions,
-  isVirtualGalaxyLayout,
+  hasValidGalaxyLayout,
 } from './layout-payload.js';
 import {
   expandReposToVirtualStars,
   buildTopicRingKeySet,
-  layoutVirtualStarPositions,
   applyTopicRingRefinement,
   topicRingKey,
   virtualLanguageKey,
   buildRepoIdToVirtualIndices,
 } from './virtual-stars.js';
-import { buildMorphologicalVirtualPositions, harmonizeCosmicSpan, buildLanguageGalaxyHubs, galaxyRadiusForLanguage, galaxyFrameAngles, buildGasClumpField, sampleGasCloudParticle, rotateGalaxyLocal, qualifyingGasLanguages } from './morphological-layout.js';
+import { buildMorphologicalVirtualPositions, harmonizeCosmicSpan, buildLanguageGalaxyHubs, buildCosmicLanguageField, galaxyRadiusForLanguage, galaxyFrameAngles, buildGasClumpField, sampleGasCloudParticle, sampleGasDustParticle, rotateGalaxyLocal, qualifyingGasLanguages } from './morphological-layout.js';
 
 /**
- * 分层摆位：语言星团 → topic 子团/星环 → 单星
+ * 分层摆位：语言星系 → 开放星团（topic）→ 单星（仓）
  * @param {Array<object>} repos
  * @param {import('./virtual-stars.js').VirtualStar[]} virtualStars
  * @param {ReturnType<typeof buildLanguageLayout>} layout
  * @param {Set<string>} ringKeys
  */
-export function buildStructuredVirtualPositions(repos, virtualStars, layout, ringKeys, gasBuffers, ringStarFlags = null) {
+export function buildStructuredVirtualPositions(repos, virtualStars, layout, ringKeys, gasBuffers, ringStarFlags = null, gasDustBuffers = null) {
   const positions = buildMorphologicalVirtualPositions(repos, virtualStars, layout, ringKeys);
-  const aux =
-    gasBuffers?.count > 0
-      ? [{ buf: gasBuffers.positions, n: gasBuffers.count }]
-      : [];
+  /** @type {Array<{ buf: Float32Array, n: number }>} */
+  const aux = [];
+  if (gasBuffers?.count > 0) {
+    aux.push({ buf: gasBuffers.positions, n: gasBuffers.count });
+  }
+  if (gasDustBuffers?.count > 0) {
+    aux.push({ buf: gasDustBuffers.positions, n: gasDustBuffers.count });
+  }
   const harmonizeMeta = harmonizeCosmicSpan(positions, virtualStars.length, aux);
   const hubs =
     buildHarmonizedRawLanguageHubs(layout, harmonizeMeta) ?? buildLanguageGalaxyHubs(layout);
@@ -139,16 +141,12 @@ function repoVisualInfluence(item, ctx) {
   return push * PUSH + stars * STARS + watchers * WATCHERS + forks * FORKS;
 }
 
-function virtualStarRgb(v, langRgb) {
-  if (!v.topic) return langRgb;
+function virtualStarRgb(v, langRgb, influence) {
   const h = hashStr(v.virtualKey);
-  const u = ((h >>> 4) & 0xfffffff) / 0xfffffff;
-  const [r, g, b] = langRgb;
-  return [
-    Math.min(1, r * (0.78 + u * 0.42)),
-    Math.min(1, g * (0.72 + (1 - u) * 0.38)),
-    Math.min(1, b * (0.76 + u * 0.32)),
-  ];
+  const jitter = ((h >>> 8) & 0xffff) / 0xffff * 0.18 - 0.09;
+  const stellar = stellarTempRgb(influence, jitter);
+  const langMix = v.topic ? 0.58 : 0.68;
+  return blendCosmicColor(langRgb, stellar, langMix);
 }
 
 function mapInfluenceToRange(influence, range) {
@@ -428,8 +426,49 @@ export function repoPosition(item, maxStars, layout = null) {
   ];
 }
 
+/** 星点尺寸分数：stars + watchers + forks，不含 pushedAt */
+function repoSizeScore(item, ctx) {
+  const stars = normLogCount(item.stars, ctx.maxStars);
+  const watchers = normLogCount(item.watchersCount, ctx.maxWatchers);
+  const forks = normLogCount(item.forksCount, ctx.maxForks);
+  const { STARS, WATCHERS, FORKS } = PARTICLE_SIZE_WEIGHTS;
+  return stars * STARS + watchers * WATCHERS + forks * FORKS;
+}
+
+/**
+ * 按尺寸分数分位映射 aSize，拉开 star 数层次（与闪烁分位同理）
+ * @param {Array<object>} list
+ * @param {{ maxStars: number, maxForks: number, maxWatchers: number }} ctx
+ */
+function buildStarSizes(list, ctx) {
+  const n = list.length;
+  const sizes = new Float32Array(n);
+  if (n === 0) return sizes;
+  const { MIN, MAX, RANK_GAMMA } = PARTICLE_SIZE_RANGE;
+  if (n === 1) {
+    sizes[0] = MIN + (MAX - MIN) * 0.72;
+    return sizes;
+  }
+
+  const ranked = list.map((item, index) => ({
+    index,
+    score: repoSizeScore(item, ctx),
+  }));
+  ranked.sort((a, b) => a.score - b.score || a.index - b.index);
+
+  const inv = 1 / (n - 1);
+  const rankGamma = RANK_GAMMA ?? 0.55;
+  for (let rank = 0; rank < n; rank += 1) {
+    const percentile = rank * inv;
+    const t = Math.pow(percentile, rankGamma);
+    sizes[ranked[rank].index] = MIN + t * (MAX - MIN);
+  }
+  return sizes;
+}
+
+/** 单仓估算（非分位；批量构建请用 buildStarSizes） */
 export function repoParticleSize(item, ctx) {
-  return mapInfluenceToRange(repoVisualInfluence(item, ctx), PARTICLE_SIZE_RANGE);
+  return mapInfluenceToRange(repoSizeScore(item, ctx), PARTICLE_SIZE_RANGE);
 }
 
 export function repoBrightness(item, ctx) {
@@ -493,51 +532,6 @@ export function ownerSelfRepoId(owner, repoName) {
   if (repo !== name) return '';
   return `${name}-${name}`;
 }
-function computeCentroid(buf, n) {
-  let cx = 0;
-  let cy = 0;
-  let cz = 0;
-  for (let i = 0; i < n; i += 1) {
-    cx += buf[i * 3];
-    cy += buf[i * 3 + 1];
-    cz += buf[i * 3 + 2];
-  }
-  const inv = 1 / Math.max(n, 1);
-  return [cx * inv, cy * inv, cz * inv];
-}
-
-function subtractCentroid(buf, n, cx, cy, cz) {
-  for (let i = 0; i < n; i += 1) {
-    buf[i * 3] -= cx;
-    buf[i * 3 + 1] -= cy;
-    buf[i * 3 + 2] -= cz;
-  }
-}
-
-function centerPositions(positions, count) {
-  if (count <= 0) return [0, 0, 0];
-  const [cx, cy, cz] = computeCentroid(positions, count);
-  subtractCentroid(positions, count, cx, cy, cz);
-  return [cx, cy, cz];
-}
-
-function normalizePositionSpan(positions, count, targetSpan) {
-  if (count <= 0) return;
-  let maxR = 1;
-  for (let i = 0; i < count; i += 1) {
-    const x = positions[i * 3];
-    const y = positions[i * 3 + 1];
-    const z = positions[i * 3 + 2];
-    maxR = Math.max(maxR, Math.sqrt(x * x + y * y + z * z));
-  }
-  const scale = targetSpan / maxR;
-  if (Math.abs(scale - 1) < 0.02) return;
-  for (let i = 0; i < count; i += 1) {
-    positions[i * 3] *= scale;
-    positions[i * 3 + 1] *= scale;
-    positions[i * 3 + 2] *= scale;
-  }
-}
 
 export function buildGalaxyBuffers(items, galaxyCtx = null) {
   const repos = items || [];
@@ -569,92 +563,48 @@ export function buildGalaxyBuffers(items, galaxyCtx = null) {
   let anchorIndex = -1;
   let harmonizeMeta = null;
   const gasBuffers = buildGalaxyGasBuffers(layout, repos);
+  const gasDustBuffers = buildGalaxyGasDustBuffers(layout, repos);
 
   const ringStarFlags = new Float32Array(count);
 
-  const hasVirtualLayout =
+  const precomputed =
     galaxyCtx?.layout &&
-    isVirtualGalaxyLayout(galaxyCtx.layout) &&
-    galaxyCtx.virtualIndexMap?.size;
+    hasValidGalaxyLayout(galaxyCtx.layout) &&
+    galaxyCtx.virtualIndexMap?.size
+      ? extractVirtualLayoutPositions(virtualStars, galaxyCtx.layout, galaxyCtx.virtualIndexMap)
+      : null;
 
-  if (hasVirtualLayout) {
+  if (precomputed) {
+    positions = precomputed.positions;
+    anchorIndex = precomputed.anchorIndex;
+  } else {
     const structured = buildStructuredVirtualPositions(
       repos,
       virtualStars,
       layout,
       ringKeys,
       gasBuffers,
-      ringStarFlags
+      ringStarFlags,
+      gasDustBuffers
     );
     positions = structured.positions;
     harmonizeMeta = structured.harmonizeMeta;
-    const anchorId = galaxyCtx.layout?.anchorId;
-    if (anchorId) {
+    const anchorRepoId = findAnchorRepoId(repos);
+    if (anchorRepoId) {
       for (let i = 0; i < count; i += 1) {
-        if (virtualStars[i].repoId === anchorId) {
+        if (virtualStars[i].repoId === anchorRepoId) {
           anchorIndex = i;
           break;
-        }
-      }
-    }
-  } else {
-    const anchorRepoId = galaxyCtx?.layout?.anchorId ?? findAnchorRepoId(repos);
-    const legacyRepoLayout =
-      galaxyCtx?.layout &&
-      !isVirtualGalaxyLayout(galaxyCtx.layout) &&
-      galaxyCtx.indexMap?.size
-        ? extractLayoutPositions(repos, galaxyCtx.layout, galaxyCtx.indexMap)
-        : null;
-
-    if (legacyRepoLayout) {
-      let anchorRepoIndex = legacyRepoLayout.anchorIndex;
-      const repoPosById = new Map();
-      for (let i = 0; i < repos.length; i += 1) {
-        const id = repos[i]?.id;
-        if (!id) continue;
-        repoPosById.set(id, [
-          legacyRepoLayout.positions[i * 3],
-          legacyRepoLayout.positions[i * 3 + 1],
-          legacyRepoLayout.positions[i * 3 + 2],
-        ]);
-      }
-      positions = layoutVirtualStarPositions(virtualStars, layout, ringKeys, repoPosById);
-      const [cx, cy, cz] = centerPositions(positions, count);
-      subtractCentroid(gasBuffers.positions, gasBuffers.count, cx, cy, cz);
-      if (anchorRepoIndex >= 0 && repos[anchorRepoIndex]?.id) {
-        const anchorId = repos[anchorRepoIndex].id;
-        for (let i = 0; i < count; i += 1) {
-          if (virtualStars[i].repoId === anchorId) {
-            anchorIndex = i;
-            break;
-          }
-        }
-      }
-    } else {
-      const structured = buildStructuredVirtualPositions(
-        repos,
-        virtualStars,
-        layout,
-        ringKeys,
-        gasBuffers,
-        ringStarFlags
-      );
-      positions = structured.positions;
-      harmonizeMeta = structured.harmonizeMeta;
-      const anchorRepoId = findAnchorRepoId(repos);
-      if (anchorRepoId) {
-        for (let i = 0; i < count; i += 1) {
-          if (virtualStars[i].repoId === anchorRepoId) {
-            anchorIndex = i;
-            break;
-          }
         }
       }
     }
   }
 
   const colors = new Float32Array(count * 3);
-  const sizes = new Float32Array(count);
+  const sizes = buildStarSizes(
+    virtualStars.map((v) => v.item),
+    sizeCtx
+  );
   const brights = new Float32Array(count);
   const activities = new Float32Array(count);
   const seeds = new Float32Array(count);
@@ -665,13 +615,13 @@ export function buildGalaxyBuffers(items, galaxyCtx = null) {
     const v = virtualStars[i];
     const item = v.item;
 
-    const [r, g, b] = virtualStarRgb(v, repoLangRgb(item.language));
+    const influence = repoVisualInfluence(item, sizeCtx);
+    const [r, g, b] = virtualStarRgb(v, repoLangRgb(item.language), influence);
     const bright = repoBrightness(item, sizeCtx);
-    colors[i * 3] = r * bright;
-    colors[i * 3 + 1] = g * bright;
-    colors[i * 3 + 2] = b * bright;
+    colors[i * 3] = r * (0.78 + bright * 0.42);
+    colors[i * 3 + 1] = g * (0.78 + bright * 0.42);
+    colors[i * 3 + 2] = b * (0.78 + bright * 0.42);
 
-    sizes[i] = repoParticleSize(item, sizeCtx);
     brights[i] = bright;
     if (i === anchorIndex) {
       sizes[i] *= 1.4;
@@ -687,7 +637,9 @@ export function buildGalaxyBuffers(items, galaxyCtx = null) {
     }
   }
 
-  boostTopicRingStars(virtualStars, layout, ringKeys, sizes, brights, count, ringStarFlags);
+  if (GALAXY.TOPIC_RINGS_ENABLED) {
+    boostTopicRingStars(virtualStars, layout, ringKeys, sizes, brights, count, ringStarFlags);
+  }
 
   const langHubOverrides =
     buildHarmonizedRawLanguageHubs(layout, harmonizeMeta) ??
@@ -702,6 +654,7 @@ export function buildGalaxyBuffers(items, galaxyCtx = null) {
     langHubOverrides
   );
   fillGasMotionFields(gasBuffers, layout, langHubOverrides);
+  fillGasMotionFields(gasDustBuffers, layout, langHubOverrides);
 
   return {
     count,
@@ -722,20 +675,23 @@ export function buildGalaxyBuffers(items, galaxyCtx = null) {
     motion,
     anchorIndex,
     gas: gasBuffers,
+    gasDust: gasDustBuffers,
     ringStarFlags,
   };
 }
 
-/** 按语言星系 hub 生成着色气体云粒子（仅较大星系，与星点同步 harmonize） */
+/** 按密度场生成气体：语言核局部 + 全局背景雾 */
 export function buildGalaxyGasBuffers(layout, repos) {
-  const { GAS_PARTICLES_PER_GALAXY, GAS_CORE_FILL_COUNT } = COSMIC_UNIVERSE;
+  const { GAS_PARTICLES_PER_GALAXY, GAS_CORE_FILL_COUNT, FIELD_GAS_COUNT } = COSMIC_UNIVERSE;
   const hubs = buildLanguageGalaxyHubs(layout);
+  const field = buildCosmicLanguageField(layout, Math.max(repos?.length ?? 0, 1));
   const total = Math.max(repos?.length ?? 0, 1);
   const sf = Math.min(layout.spreadFactor ?? 1, 1.32);
   const gasLangs = qualifyingGasLanguages(layout);
   const perGalaxy = GAS_PARTICLES_PER_GALAXY;
   const corePerGalaxy = GAS_CORE_FILL_COUNT;
-  const count = gasLangs.length * (perGalaxy + corePerGalaxy);
+  const fieldGas = FIELD_GAS_COUNT ?? 0;
+  const count = gasLangs.length * (perGalaxy + corePerGalaxy) + fieldGas;
   if (!count) {
     return {
       positions: new Float32Array(0),
@@ -768,7 +724,7 @@ export function buildGalaxyGasBuffers(layout, repos) {
     const gR = galaxyRadiusForLanguage(lang, layout, total) * sf;
     langRadii.push(gR);
     const [br, bg, bb] = repoLangRgb(lang);
-    const { tiltX, tiltZ } = galaxyFrameAngles(lang);
+    const { tiltX, tiltY, tiltZ } = galaxyFrameAngles(lang);
     const gasField = buildGasClumpField(lang, gR);
     const morphStretch =
       gasField.morphology === 3 ? 0.22 : gasField.morphology === 4 ? 0.18 : gasField.morphology === 2 ? 0.14 : 0.06;
@@ -776,26 +732,24 @@ export function buildGalaxyGasBuffers(layout, repos) {
     for (let j = 0; j < perGalaxy; j += 1) {
       const h = hashStr(`galaxy-gas:${lang}:${j}`);
       const particle = sampleGasCloudParticle(h, gasField);
-      const [rx, ry, rz] = rotateGalaxyLocal(particle.lx, particle.ly, particle.lz, tiltX, tiltZ);
+      const [rx, ry, rz] = rotateGalaxyLocal(particle.lx, particle.ly, particle.lz, tiltX, tiltZ, tiltY);
       const d = particle.density;
 
       positions[o * 3] = hub[0] * sf + rx;
       positions[o * 3 + 1] = hub[1] * sf + ry;
       positions[o * 3 + 2] = hub[2] * sf + rz;
 
-      const tint = 0.58 + d * 0.32 + hashUnit(h, 7) * 0.2;
-      const hueShift = (hashUnit(h, 12) - 0.5) * 0.08;
-      colors[o * 3] = Math.min(1, br * tint + hueShift);
-      colors[o * 3 + 1] = Math.min(1, bg * tint);
-      colors[o * 3 + 2] = Math.min(1, bb * tint - hueShift * 0.4);
+      const [nr, ng, nb] = nebulaLangTint([br, bg, bb], d);
+      colors[o * 3] = nr;
+      colors[o * 3 + 1] = ng;
+      colors[o * 3 + 2] = nb;
 
-      const coreLift = d * d;
-      sizes[o] = 5.5 + coreLift * 11.0 + hashUnit(h, 8) * (3.5 + d * 7.5);
+      sizes[o] = 5.2 + (1 - d) * 7.2 + d * 2.8 + hashUnit(h, 8) * (2.2 + (1 - d) * 3.4);
 
       phases[o] = hashUnit(h, 9) * Math.PI * 2;
-      softness[o] = 0.42 + (1 - d) * 0.38;
+      softness[o] = 0.58 + (1 - d) * 0.38;
       density[o] = d;
-      stretch[o] = morphStretch + hashUnit(h, 13) * 0.35;
+      stretch[o] = (particle.stretch ?? morphStretch) + hashUnit(h, 13) * 0.22;
       o += 1;
     }
 
@@ -807,17 +761,17 @@ export function buildGalaxyGasBuffers(layout, repos) {
       const lx = Math.cos(ang) * coreR * (0.35 + hashUnit(h, 4) * 0.65);
       const ly = (lift - 0.5) * gR * 0.14 * (0.4 + hashUnit(h, 5) * 0.6);
       const lz = Math.sin(ang) * coreR * (0.35 + hashUnit(h, 6) * 0.65);
-      const [rx, ry, rz] = rotateGalaxyLocal(lx, ly, lz, tiltX, tiltZ);
+      const [rx, ry, rz] = rotateGalaxyLocal(lx, ly, lz, tiltX, tiltZ, tiltY);
       const d = 0.72 + hashUnit(h, 7) * 0.22;
 
       positions[o * 3] = hub[0] * sf + rx;
       positions[o * 3 + 1] = hub[1] * sf + ry;
       positions[o * 3 + 2] = hub[2] * sf + rz;
 
-      const tint = 0.68 + d * 0.28;
-      colors[o * 3] = Math.min(1, br * tint);
-      colors[o * 3 + 1] = Math.min(1, bg * tint);
-      colors[o * 3 + 2] = Math.min(1, bb * tint);
+      const [nr, ng, nb] = nebulaLangTint([br, bg, bb], d);
+      colors[o * 3] = nr;
+      colors[o * 3 + 1] = ng;
+      colors[o * 3 + 2] = nb;
 
       sizes[o] = 14.0 + hashUnit(h, 8) * 12.0;
       phases[o] = hashUnit(h, 9) * Math.PI * 2;
@@ -828,6 +782,45 @@ export function buildGalaxyGasBuffers(layout, repos) {
     }
   }
 
+  const kernels = [...field.kernels.values()];
+  const span = field.span;
+  const coreR = field.coreR;
+  for (let j = 0; j < fieldGas; j += 1) {
+    const h = hashStr(`field-gas:${j}`);
+    const u = hashUnit(h, 1);
+    const v = hashUnit(h, 2);
+    const w = hashUnit(h, 3);
+    const theta = Math.PI * 2 * u;
+    const phi = Math.acos(Math.max(-1, Math.min(1, 2 * v - 1)));
+    const radial = coreR * 1.38 * Math.cbrt(w);
+    let gx = radial * Math.sin(phi) * Math.cos(theta);
+    let gy = radial * Math.cos(phi);
+    let gz = radial * Math.sin(phi) * Math.sin(theta);
+    gx += gauss3(hashSeed(h, 'g1'), hashSeed(h, 'g2'), hashSeed(h, 'g3')) * span * 0.04;
+    gy += gauss3(hashSeed(h, 'g4'), hashSeed(h, 'g5'), hashSeed(h, 'g6')) * span * 0.032;
+    gz += gauss3(hashSeed(h, 'g7'), hashSeed(h, 'g8'), hashSeed(h, 'g9')) * span * 0.04;
+
+    positions[o * 3] = gx * sf;
+    positions[o * 3 + 1] = gy * sf;
+    positions[o * 3 + 2] = gz * sf;
+
+    const pick = kernels[Math.floor(hashUnit(h, 10) * kernels.length) % kernels.length];
+    const lang = pick?.lang ?? '其他';
+    const [br, bg, bb] = repoLangRgb(lang);
+    const d = 0.28 + hashUnit(h, 11) * 0.42;
+    const [nr, ng, nb] = nebulaLangTint([br, bg, bb], d);
+    colors[o * 3] = nr;
+    colors[o * 3 + 1] = ng;
+    colors[o * 3 + 2] = nb;
+    sizes[o] = 4.8 + hashUnit(h, 13) * 7.2;
+    phases[o] = hashUnit(h, 14) * Math.PI * 2;
+    softness[o] = 0.72 + hashUnit(h, 15) * 0.24;
+    density[o] = d;
+    stretch[o] = 0.02 + hashUnit(h, 16) * 0.06;
+    o += 1;
+  }
+
+  const fieldGasStart = gasLangs.length * (perGalaxy + corePerGalaxy);
   return {
     positions,
     colors,
@@ -840,6 +833,116 @@ export function buildGalaxyGasBuffers(layout, repos) {
     langRadii,
     perGalaxy,
     corePerGalaxy,
+    fieldGasStart,
+    fieldGasCount: fieldGas,
+    fieldVolumeRadius: coreR * sf * 1.62,
+    count,
+  };
+}
+
+/** 暗尘层：与语言 gas 同 hub，采样 clump 中心 */
+export function buildGalaxyGasDustBuffers(layout, repos) {
+  const { GAS_DUST_PER_GALAXY, FIELD_DUST_COUNT } = COSMIC_UNIVERSE;
+  const hubs = buildLanguageGalaxyHubs(layout);
+  const field = buildCosmicLanguageField(layout, Math.max(repos?.length ?? 0, 1));
+  const total = Math.max(repos?.length ?? 0, 1);
+  const sf = Math.min(layout.spreadFactor ?? 1, 1.32);
+  const gasLangs = qualifyingGasLanguages(layout);
+  const perGalaxy = GAS_DUST_PER_GALAXY ?? 0;
+  const fieldDust = FIELD_DUST_COUNT ?? 0;
+  const count = gasLangs.length * perGalaxy + fieldDust;
+  if (!count) {
+    return {
+      positions: new Float32Array(0),
+      colors: new Float32Array(0),
+      sizes: new Float32Array(0),
+      density: new Float32Array(0),
+      languages: [],
+      perGalaxy,
+      fieldDustStart: 0,
+      fieldDustCount: 0,
+      count: 0,
+    };
+  }
+
+  const positions = new Float32Array(count * 3);
+  const colors = new Float32Array(count * 3);
+  const sizes = new Float32Array(count);
+  const density = new Float32Array(count);
+  let o = 0;
+
+  for (const lang of gasLangs) {
+    const hub = hubs.get(lang) ?? [0, 0, 0];
+    const gR = galaxyRadiusForLanguage(lang, layout, total) * sf;
+    const [br, bg, bb] = repoLangRgb(lang);
+    const { tiltX, tiltY, tiltZ } = galaxyFrameAngles(lang);
+    const gasField = buildGasClumpField(lang, gR);
+
+    for (let j = 0; j < perGalaxy; j += 1) {
+      const h = hashStr(`galaxy-dust:${lang}:${j}`);
+      const particle = sampleGasDustParticle(h, gasField);
+      const [rx, ry, rz] = rotateGalaxyLocal(particle.lx, particle.ly, particle.lz, tiltX, tiltZ, tiltY);
+      const d = particle.density;
+
+      positions[o * 3] = hub[0] * sf + rx;
+      positions[o * 3 + 1] = hub[1] * sf + ry;
+      positions[o * 3 + 2] = hub[2] * sf + rz;
+
+      const [dr, dg, db] = nebulaDustRgb([br, bg, bb], d);
+      colors[o * 3] = dr;
+      colors[o * 3 + 1] = dg;
+      colors[o * 3 + 2] = db;
+      sizes[o] = 2.4 + d * 3.8 + hashUnit(h, 8) * 2.6;
+      density[o] = d;
+      o += 1;
+    }
+  }
+
+  const kernels = [...field.kernels.values()];
+  const span = field.span;
+  const coreR = field.coreR;
+  for (let j = 0; j < fieldDust; j += 1) {
+    const h = hashStr(`field-dust:${j}`);
+    const u = hashUnit(h, 1);
+    const v = hashUnit(h, 2);
+    const w = hashUnit(h, 3);
+    const theta = Math.PI * 2 * u;
+    const phi = Math.acos(Math.max(-1, Math.min(1, 2 * v - 1)));
+    const radial = coreR * 1.05 * Math.cbrt(w);
+    let gx = radial * Math.sin(phi) * Math.cos(theta);
+    let gy = radial * Math.cos(phi);
+    let gz = radial * Math.sin(phi) * Math.sin(theta);
+    gx += gauss3(hashSeed(h, 'd1'), hashSeed(h, 'd2'), hashSeed(h, 'd3')) * span * 0.035;
+    gy += gauss3(hashSeed(h, 'd4'), hashSeed(h, 'd5'), hashSeed(h, 'd6')) * span * 0.028;
+    gz += gauss3(hashSeed(h, 'd7'), hashSeed(h, 'd8'), hashSeed(h, 'd9')) * span * 0.035;
+
+    positions[o * 3] = gx * sf;
+    positions[o * 3 + 1] = gy * sf;
+    positions[o * 3 + 2] = gz * sf;
+
+    const pick = kernels[Math.floor(hashUnit(h, 10) * kernels.length) % kernels.length];
+    const lang = pick?.lang ?? '其他';
+    const [br, bg, bb] = repoLangRgb(lang);
+    const d = 0.32 + hashUnit(h, 11) * 0.48;
+    const [dr, dg, db] = nebulaDustRgb([br, bg, bb], d);
+    colors[o * 3] = dr;
+    colors[o * 3 + 1] = dg;
+    colors[o * 3 + 2] = db;
+    sizes[o] = 1.8 + hashUnit(h, 12) * 2.8;
+    density[o] = d;
+    o += 1;
+  }
+
+  const fieldDustStart = gasLangs.length * perGalaxy;
+  return {
+    positions,
+    colors,
+    sizes,
+    density,
+    languages: gasLangs,
+    perGalaxy,
+    fieldDustStart,
+    fieldDustCount: fieldDust,
     count,
   };
 }
@@ -872,7 +975,7 @@ export function buildDustBuffers(count = 1600) {
     positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
     positions[i * 3 + 1] = r * Math.cos(phi);
     positions[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
-    sizes[i] = 0.16 + hashUnit(h, 6) * 0.24;
+    sizes[i] = 0.1 + hashUnit(h, 6) * 0.18;
   }
   return { positions, sizes };
 }

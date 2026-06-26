@@ -70,6 +70,8 @@ export function topicRingKey(lang, topic) {
  * @returns {Set<string>}
  */
 export function buildTopicRingKeySet(virtualStars, layout) {
+  if (!GALAXY.TOPIC_RINGS_ENABLED) return new Set();
+
   const ringKeys = new Set();
   const { TOPIC_RING_MIN_COUNT, TOPIC_RING_MAX_COUNT, TOPIC_RING_MAX_PERCENT } = GALAXY;
 
@@ -116,147 +118,6 @@ export function buildTopicRingKeySet(virtualStars, layout) {
 export function virtualLanguageKey(v, layout) {
   const lang = v.language || '其他';
   return layout?.langKeys?.has(lang) ? lang : '其他';
-}
-
-/**
- * @param {number[]} indices
- * @param {VirtualStar[]} virtualStars
- * @param {Map<string, [number, number, number]>} repoPosById
- */
-function measureGroupFromRepos(indices, virtualStars, repoPosById) {
-  let cx = 0;
-  let cy = 0;
-  let cz = 0;
-  let n = 0;
-  for (const i of indices) {
-    const p = repoPosById.get(virtualStars[i].repoId);
-    if (!p) continue;
-    cx += p[0];
-    cy += p[1];
-    cz += p[2];
-    n += 1;
-  }
-  if (!n) {
-    return { cx: 0, cy: 0, cz: 0, spread: 14 };
-  }
-  const inv = 1 / n;
-  cx *= inv;
-  cy *= inv;
-  cz *= inv;
-  let maxR = 1;
-  for (const i of indices) {
-    const p = repoPosById.get(virtualStars[i].repoId);
-    if (!p) continue;
-    const dx = p[0] - cx;
-    const dy = p[1] - cy;
-    const dz = p[2] - cz;
-    maxR = Math.max(maxR, Math.sqrt(dx * dx + dy * dy + dz * dz));
-  }
-  const spread = Math.max(
-    MORPHOLOGY_LAYOUT.GROUP_SPREAD_MIN,
-    maxR * 1.15,
-    Math.sqrt(n) * MORPHOLOGY_LAYOUT.GROUP_SPREAD_PER_STAR
-  );
-  return { cx, cy, cz, spread, n };
-}
-
-/**
- * @param {VirtualStar[]} virtualStars
- * @param {ReturnType<typeof import('./positions.js').buildLanguageLayout>} layout
- * @param {Set<string>} ringKeys
- * @param {Map<string, [number, number, number]>} repoPosById
- * @returns {Float32Array}
- */
-export function layoutVirtualStarPositions(virtualStars, layout, ringKeys, repoPosById) {
-  const n = virtualStars.length;
-  const positions = new Float32Array(n * 3);
-  if (!n) return positions;
-
-  /** @type {Map<string, number[]>} */
-  const ringGroups = new Map();
-  /** @type {Map<string, number[]>} */
-  const cloudGroups = new Map();
-
-  /** @type {Map<string, number>} */
-  const repoTopicCounts = new Map();
-  for (const v of virtualStars) {
-    if (!v.topic) continue;
-    repoTopicCounts.set(v.repoId, (repoTopicCounts.get(v.repoId) || 0) + 1);
-  }
-
-  /** @type {Map<string, number>} */
-  const repoTopicSlot = new Map();
-
-  /** @type {Map<string, { spread: number }>} */
-  const langSpreadCache = new Map();
-  /** @type {Map<string, number[]>} */
-  const langIndices = new Map();
-  for (let i = 0; i < n; i += 1) {
-    const lang = virtualLanguageKey(virtualStars[i], layout);
-    if (!langIndices.has(lang)) langIndices.set(lang, []);
-    langIndices.get(lang).push(i);
-  }
-  for (const [lang, indices] of langIndices) {
-    const g = measureGroupFromRepos(indices, virtualStars, repoPosById);
-    langSpreadCache.set(lang, { spread: g.spread });
-  }
-
-  for (let i = 0; i < n; i += 1) {
-    const v = virtualStars[i];
-    const lang = virtualLanguageKey(v, layout);
-    const ringKey = v.topic ? topicRingKey(lang, v.topic) : '';
-    const isRing = v.topic && ringKeys.has(ringKey);
-    if (isRing) {
-      if (!ringGroups.has(ringKey)) ringGroups.set(ringKey, []);
-      ringGroups.get(ringKey).push(i);
-    } else {
-      const cloudKey = v.topic ? topicRingKey(lang, v.topic) : `${lang}\0__none__`;
-      if (!cloudGroups.has(cloudKey)) cloudGroups.set(cloudKey, []);
-      cloudGroups.get(cloudKey).push(i);
-    }
-  }
-
-  for (const [ringKey, indices] of ringGroups) {
-    const lang = ringKey.split('\0')[0] || '其他';
-    const langSpread = langSpreadCache.get(lang)?.spread ?? 14;
-    const group = measureGroupFromRepos(indices, virtualStars, repoPosById);
-
-    const h = hashStr(`ring-nudge:${ringKey}`);
-    const tangAng = Math.atan2(group.cz, group.cx) + Math.PI / 2;
-    const nudgeR = group.spread * 0.42 + langSpread * 0.18;
-    const nudgeAng = tangAng + (hashUnit(h, 2) - 0.5) * 0.55;
-    const rcx = group.cx + Math.cos(nudgeAng) * nudgeR;
-    const rcy = group.cy + gauss3(hashSeed(h, 'y1'), 0, 0) * group.spread * 0.08;
-    const rcz = group.cz + Math.sin(nudgeAng) * nudgeR;
-
-    placeRingGroup(
-      virtualStars,
-      indices,
-      positions,
-      rcx,
-      rcy,
-      rcz,
-      group.spread * 1.08,
-      ringKey,
-      tangAng
-    );
-  }
-
-  for (const [, indices] of cloudGroups) {
-    const lang = virtualLanguageKey(virtualStars[indices[0]], layout);
-    const langSpread = langSpreadCache.get(lang)?.spread ?? 14;
-    placeCloudGroup(
-      virtualStars,
-      indices,
-      positions,
-      repoPosById,
-      langSpread,
-      repoTopicCounts,
-      repoTopicSlot
-    );
-  }
-
-  return positions;
 }
 
 /**
@@ -473,68 +334,6 @@ function nebulaSampleRadius(h, cloudSpread) {
   const haloPower = MORPHOLOGY_LAYOUT.NEBULA_HALO_POWER ?? 1.45;
   const haloScale = MORPHOLOGY_LAYOUT.NEBULA_HALO_SCALE ?? 0.76;
   return spread * (0.24 + Math.pow(t, haloPower) * haloScale);
-}
-
-/**
- * @param {VirtualStar[]} virtualStars
- * @param {number[]} indices
- * @param {Float32Array} positions
- * @param {Map<string, [number, number, number]>} repoPosById
- * @param {number} langSpread
- * @param {Map<string, number>} repoTopicCounts
- * @param {Map<string, number>} repoTopicSlot
- */
-function placeCloudGroup(
-  virtualStars,
-  indices,
-  positions,
-  repoPosById,
-  langSpread,
-  repoTopicCounts,
-  repoTopicSlot
-) {
-  const group = measureGroupFromRepos(indices, virtualStars, repoPosById);
-  const count = indices.length;
-  const cloudSpread = Math.max(
-    GALAXY.TOPIC_CLOUD_SPREAD,
-    langSpread * MORPHOLOGY_LAYOUT.LANG_SPREAD_FACTOR
-  );
-
-  for (let j = 0; j < count; j += 1) {
-    const i = indices[j];
-    const v = virtualStars[i];
-    const base = repoPosById.get(v.repoId);
-    const cx = base?.[0] ?? group.cx;
-    const cy = base?.[1] ?? group.cy;
-    const cz = base?.[2] ?? group.cz;
-    const h = hashStr(v.virtualKey);
-
-    const r = nebulaSampleRadius(h, cloudSpread);
-    const ang = hashUnit(h, 7) * Math.PI * 2 + gauss3(hashSeed(h, 'a1'), hashSeed(h, 'a2'), hashSeed(h, 'a3')) * 0.35;
-    let bx = cx + Math.cos(ang) * r;
-    let by = cy + gauss3(hashSeed(h, 'y1'), hashSeed(h, 'y2'), hashSeed(h, 'y3')) * cloudSpread * 0.28;
-    let bz = cz + Math.sin(ang) * r;
-
-    const topicCount = repoTopicCounts.get(v.repoId) || 1;
-    let slot = repoTopicSlot.get(v.repoId) ?? 0;
-    repoTopicSlot.set(v.repoId, slot + 1);
-
-    if (topicCount > 1) {
-      const subAng = (Math.PI * 2 * slot) / topicCount + hashUnit(h, 4) * 0.4;
-      const subR = cloudSpread * (0.28 + topicCount * 0.06);
-      bx += Math.cos(subAng) * subR;
-      bz += Math.sin(subAng) * subR;
-    }
-
-    const wisp = cloudSpread * 0.22;
-    const ox = gauss3(hashSeed(h, 'cx'), hashSeed(h, 'cy'), hashSeed(h, 'cz')) * wisp;
-    const oy = gauss3(hashSeed(h, 'y4'), hashSeed(h, 'y5'), hashSeed(h, 'y6')) * wisp * 0.65;
-    const oz = gauss3(hashSeed(h, 'cz1'), hashSeed(h, 'cz2'), hashSeed(h, 'cz3')) * wisp;
-
-    positions[i * 3] = bx + ox;
-    positions[i * 3 + 1] = by + oy;
-    positions[i * 3 + 2] = bz + oz;
-  }
 }
 
 /**

@@ -84,7 +84,10 @@ export function pickStarIndexScreen(opts) {
       )
     );
     const pixelSize = aSize * (0.58 + bright * 0.28) * pixelRatio * distScale;
-    const pickR = Math.max(5, Math.min(22, pixelSize * 0.42));
+    const pickR = Math.max(
+      GALAXY_ZOOM.PICK_RADIUS_MIN ?? 6,
+      Math.min(GALAXY_ZOOM.PICK_RADIUS_MAX ?? 28, pixelSize * (GALAXY_ZOOM.PICK_RADIUS_SCALE ?? 0.52))
+    );
 
     const dx = sx - clickX;
     const dy = sy - clickY;

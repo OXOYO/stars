@@ -378,7 +378,7 @@ async function computeGalaxyLayoutForItems(items) {
   const galaxy = computeGalaxyLayout(items);
   const sec = ((Date.now() - started) / 1000).toFixed(1);
   const virtualCount = galaxy?.positions?.length ? galaxy.positions.length / 3 : items.length;
-  const layoutTag = galaxy?.version === 3 ? `虚拟星 v${galaxy.version}` : `仓级 v${galaxy?.version ?? 2}`;
+  const layoutTag = `虚拟星 v${galaxy?.version ?? 3}`;
   console.log(`🌌 星云布局已预计算（${sec}s，${virtualCount} 颗星，${layoutTag}）`);
   return galaxy;
 }

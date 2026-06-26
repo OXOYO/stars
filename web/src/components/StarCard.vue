@@ -15,6 +15,9 @@ const props = defineProps({
   showLanguage: { type: Boolean, default: true },
   showStarsCount: { type: Boolean, default: true },
   showLicense: { type: Boolean, default: true },
+  /** 星图详情面板：默认收起 meta/标签，由面板头按钮展开 */
+  detailMode: { type: Boolean, default: false },
+  detailExpanded: { type: Boolean, default: true },
 });
 
 const store = useStarsStore();
@@ -186,6 +189,13 @@ const showMeta = computed(
 );
 const topicList = computed(() => (Array.isArray(props.item.topics) ? props.item.topics : []).slice(0, 8));
 
+const showExtras = computed(() => !props.detailMode || props.detailExpanded);
+const descCollapsed = computed(() => {
+  if (props.detailMode) return !props.detailExpanded;
+  return descOverflows.value && !descExpanded.value;
+});
+const showDescToggle = computed(() => !props.detailMode && descOverflows.value);
+
 async function toggleDesc() {
   store.toggleDescExpanded(props.item.id);
   await nextTick();
@@ -284,12 +294,12 @@ function formatShieldCount(n) {
         <p
           ref="descRef"
           class="star-card__desc"
-          :class="{ 'is-collapsed': descOverflows && !descExpanded }"
+          :class="{ 'is-collapsed': descCollapsed }"
         >
           {{ descText }}
         </p>
         <button
-          v-if="descOverflows"
+          v-if="showDescToggle"
           type="button"
           class="star-card__desc-toggle"
           @click="toggleDesc"
@@ -298,7 +308,7 @@ function formatShieldCount(n) {
         </button>
       </div>
 
-      <div v-if="showMeta" class="star-card__meta">
+      <div v-if="showMeta && showExtras" class="star-card__meta">
         <span v-if="createdLabel" class="star-card__meta-item">
           <span class="star-card__meta-label">{{ t('createdAt') }}</span>
           {{ createdLabel }}
@@ -320,7 +330,7 @@ function formatShieldCount(n) {
         </a>
       </div>
 
-      <div class="star-card__foot">
+      <div v-if="showExtras" class="star-card__foot">
         <span
           v-if="showLanguage"
           class="star-card__tag star-card__tag--lang"

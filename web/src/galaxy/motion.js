@@ -47,7 +47,7 @@ function isIntergalacticRepo(repoId) {
 }
 
 /**
- * 四层差速运动字段：宇宙公转 / 星系自转 / 星云自转 / 单星微动
+ * 运动字段：宇宙漂移 + 星系差动自转 + 星团微自转（无嵌套公转）
  */
 export function buildMotionFields(
   list,
@@ -113,10 +113,10 @@ export function buildMotionFields(
     GALAXY_SPIN_SPREAD,
     GALAXY_ORBIT_BASE,
     GALAXY_ORBIT_SPREAD,
-    NEBULA_SPIN_BASE,
-    NEBULA_SPIN_SPREAD,
-    NEBULA_ORBIT_BASE,
-    NEBULA_ORBIT_SPREAD,
+    CLUSTER_SPIN_BASE,
+    CLUSTER_SPIN_SPREAD,
+    CLUSTER_ORBIT_BASE,
+    CLUSTER_ORBIT_SPREAD,
     TOPIC_MIN_COUNT,
     STAR_SPIN_BASE,
     STAR_SPIN_SPREAD,
@@ -136,7 +136,7 @@ export function buildMotionFields(
     const ringKey = v.topic ? topicRingKey(lang, v.topic) : '';
     const hStar = hashStr(v.virtualKey);
     const hLang = hashStr(`cosmic-motion:${lang}`);
-    const hTopic = hashStr(`nebula-motion:${topicKey}`);
+    const hTopic = hashStr(`cluster-motion:${topicKey}`);
     const hRepo = hashStr(`repo-motion:${v.repoId}`);
 
     const px = positions[i * 3];
@@ -157,10 +157,9 @@ export function buildMotionFields(
     const tm = topicMeta.get(topicKey);
     const rm = repoMeta.get(v.repoId);
     const topicCount = tm?.count ?? 1;
-    const useTopicNebula =
-      v.topic && topicCount >= TOPIC_MIN_COUNT && ringKeys.has(ringKey) && tm;
+    const useTopicCluster = v.topic && topicCount >= TOPIC_MIN_COUNT && tm;
 
-    if (useTopicNebula) {
+    if (useTopicCluster) {
       nebulaCenters[i * 3] = tm.cx;
       nebulaCenters[i * 3 + 1] = tm.cy;
       nebulaCenters[i * 3 + 2] = tm.cz;
@@ -183,9 +182,7 @@ export function buildMotionFields(
       (0.42 + hashUnit(hLang, 2) * GALAXY_SPIN_SPREAD) *
       (14 / Math.max(hubDist, 5.5));
     const langGalaxyOrbit =
-      langSign *
-      GALAXY_ORBIT_BASE *
-      (0.4 + hashUnit(hLang, 5) * GALAXY_ORBIT_SPREAD);
+      langSign * GALAXY_ORBIT_BASE * (0.4 + hashUnit(hLang, 5) * GALAXY_ORBIT_SPREAD);
 
     const universeMult = intergalactic ? FIELD_UNIVERSE_MULT : 1;
     const galaxyMult = intergalactic ? FIELD_GALAXY_MULT : 1;
@@ -197,36 +194,30 @@ export function buildMotionFields(
       (0.45 + hashUnit(hLang, 1) * HUB_ORBIT_SPREAD) *
       universeMult;
     const galaxySpin = langGalaxySpin * galaxyMult;
-    const nebulaSpin =
-      useTopicNebula
+    const clusterSpin =
+      useTopicCluster
         ? topicSign *
-          NEBULA_SPIN_BASE *
-          (0.38 +
-            hashUnit(hTopic, 1) * NEBULA_SPIN_SPREAD *
-            (0.55 +
-              ((topicCount - TOPIC_MIN_COUNT) / Math.max(maxTopicCount - TOPIC_MIN_COUNT, 1)) *
-                0.95))
-        : topicSign * NEBULA_SPIN_BASE * (0.12 + hashUnit(hTopic, 2) * 0.22) * (v.topic ? 0.45 : 0.22);
-    const starSpin =
-      starSign * STAR_SPIN_BASE * (0.32 + hashUnit(hStar, 1) * STAR_SPIN_SPREAD) * rFactor * 0.55;
+          CLUSTER_SPIN_BASE *
+          (0.35 +
+            hashUnit(hTopic, 1) * CLUSTER_SPIN_SPREAD *
+            (0.45 +
+              ((topicCount - TOPIC_MIN_COUNT) / Math.max(maxTopicCount - TOPIC_MIN_COUNT, 1)) * 0.75))
+        : 0;
+    const starSpin = 0;
 
     motionOmega[i * 4] = universeOrbit * motionScale;
     motionOmega[i * 4 + 1] = galaxySpin * motionScale;
-    motionOmega[i * 4 + 2] = nebulaSpin * motionScale;
+    motionOmega[i * 4 + 2] = clusterSpin * motionScale;
     motionOmega[i * 4 + 3] = starSpin * motionScale;
 
     const galaxyOrbit = langGalaxyOrbit * galaxyMult;
-    const nebulaOrbit =
-      topicSign *
-      NEBULA_ORBIT_BASE *
-      (0.28 + hashUnit(hTopic, 3) * NEBULA_ORBIT_SPREAD) *
-      (useTopicNebula ? 1.35 : 0.18);
-    const starOrbit =
-      starSign * STAR_ORBIT_BASE * (0.32 + hashUnit(hStar, 2) * STAR_ORBIT_SPREAD) * rFactor * 0.5;
+    const clusterOrbit =
+      topicSign * CLUSTER_ORBIT_BASE * (0.28 + hashUnit(hTopic, 3) * CLUSTER_ORBIT_SPREAD);
+    const starOrbit = 0;
     const tiltMix = hashUnit(hRepo, 6) * Math.PI * 2;
 
     motionOmega2[i * 4] = galaxyOrbit * motionScale;
-    motionOmega2[i * 4 + 1] = nebulaOrbit * motionScale;
+    motionOmega2[i * 4 + 1] = clusterOrbit * motionScale;
     motionOmega2[i * 4 + 2] = starOrbit * motionScale;
     motionOmega2[i * 4 + 3] = tiltMix;
 
@@ -263,51 +254,43 @@ function applyHierarchicalMotion(rx, ry, rz, fields, i, time) {
 
   const universeOrbit = motionOmega[i * 4];
   const galaxySpin = motionOmega[i * 4 + 1];
-  const nebulaSpin = motionOmega[i * 4 + 2];
-  const starSpin = motionOmega[i * 4 + 3];
+  const clusterSpin = motionOmega[i * 4 + 2];
 
   const galaxyOrbit = motionOmega2[i * 4];
-  const nebulaOrbit = motionOmega2[i * 4 + 1];
-  const starOrbit = motionOmega2[i * 4 + 2];
+  const clusterOrbit = motionOmega2[i * 4 + 1];
   const tiltMix = motionOmega2[i * 4 + 3];
 
-  const starTilt = (hashUnit(hashStr(`st-tilt:${i}`), 0) - 0.5) * 0.26;
-  const nebTilt = (hashUnit(hashStr(`nb-tilt:${i}`), 0) - 0.5) * 0.2;
   const galTilt = tiltMix * 0.12;
+  const clusterTilt = (hashUnit(hashStr(`cl-tilt:${i}`), 0) - 0.5) * 0.12;
 
   let x = rx;
   let y = ry;
   let z = rz;
 
-  const starEcc = 0.04 + hashUnit(hashStr(`st-ecc:${i}`), 1) * 0.08;
-  const starCx = x * starEcc;
-  const starCy = y * starEcc;
-  const starCz = z * starEcc;
-  let relSx = x - starCx;
-  let relSy = y - starCy;
-  let relSz = z - starCz;
-  [relSx, relSy, relSz] = rotateTiltedY(relSx, relSy, relSz, time * starSpin, starTilt);
-  [relSx, relSy, relSz] = rotateY(relSx, relSy, relSz, time * starOrbit);
-  x = starCx + relSx;
-  y = starCy + relSy + Math.sin(time * starSpin * 0.88 + yBobPhase[i]) * yBobAmp[i];
-  z = starCz + relSz;
-
-  let relNx = x - nebX;
-  let relNy = y - nebY;
-  let relNz = z - nebZ;
-  [relNx, relNy, relNz] = rotateTiltedY(relNx, relNy, relNz, time * nebulaSpin, nebTilt);
-  [relNx, relNy, relNz] = rotateY(relNx, relNy, relNz, time * nebulaOrbit);
-  x = nebX + relNx;
-  y = nebY + relNy;
-  z = nebZ + relNz;
+  if (clusterSpin !== 0 || clusterOrbit !== 0) {
+    let relCx = x - nebX;
+    let relCy = y - nebY;
+    let relCz = z - nebZ;
+    [relCx, relCy, relCz] = rotateTiltedY(relCx, relCy, relCz, time * clusterSpin, clusterTilt);
+    if (clusterOrbit !== 0) {
+      [relCx, relCy, relCz] = rotateY(relCx, relCy, relCz, time * clusterOrbit);
+    }
+    x = nebX + relCx;
+    y = nebY + relCy;
+    z = nebZ + relCz;
+  }
 
   let relGx = x - hubX;
   let relGy = y - hubY;
   let relGz = z - hubZ;
-  [relGx, relGy, relGz] = rotateTiltedY(relGx, relGy, relGz, time * galaxySpin, galTilt);
-  [relGx, relGy, relGz] = rotateY(relGx, relGy, relGz, time * galaxyOrbit);
+  const galR = Math.max(xzRadius(relGx, relGz), 6);
+  const diffSpin = galaxySpin * (1.15 / Math.pow(galR, 0.38));
+  [relGx, relGy, relGz] = rotateTiltedY(relGx, relGy, relGz, time * diffSpin, galTilt);
+  if (galaxyOrbit !== 0) {
+    [relGx, relGy, relGz] = rotateY(relGx, relGy, relGz, time * galaxyOrbit);
+  }
   x = hubX + relGx;
-  y = hubY + relGy;
+  y = hubY + relGy + Math.sin(time * diffSpin * 0.6 + yBobPhase[i]) * yBobAmp[i];
   z = hubZ + relGz;
 
   [x, y, z] = rotateY(x, y, z, time * universeOrbit);
@@ -349,39 +332,37 @@ vec3 rotateTiltedGalaxyY(vec3 p, float ang, float tilt) {
 vec3 applyGalaxyMotion(vec3 rest) {
   float universeOrbit = uMotionTime * aMotionOmega.x;
   float galaxySpin = uMotionTime * aMotionOmega.y;
-  float nebulaSpin = uMotionTime * aMotionOmega.z;
-  float starSpin = uMotionTime * aMotionOmega.w;
+  float clusterSpin = uMotionTime * aMotionOmega.z;
 
   float galaxyOrbit = uMotionTime * aMotionOmega2.x;
-  float nebulaOrbit = uMotionTime * aMotionOmega2.y;
-  float starOrbit = uMotionTime * aMotionOmega2.z;
+  float clusterOrbit = uMotionTime * aMotionOmega2.y;
   float tiltMix = aMotionOmega2.w;
 
-  float starTilt = sin(tiltMix * 1.73) * 0.26;
-  float nebTilt = cos(tiltMix * 2.17) * 0.2;
   float galTilt = tiltMix * 0.12;
+  float clusterTilt = sin(tiltMix * 2.17) * 0.12;
 
   vec3 hub = aGalaxyHub;
-  vec3 nebC = aNebulaCenter;
+  vec3 clusterC = aNebulaCenter;
   vec3 pos = rest;
 
-  float starEcc = 0.04 + fract(sin(dot(rest.xz, vec2(12.9898, 78.233))) * 43758.5453) * 0.08;
-  vec3 starC = pos * starEcc;
-  vec3 relS = pos - starC;
-  relS = rotateTiltedGalaxyY(relS, starSpin, starTilt);
-  relS = rotateGalaxyY(relS, starOrbit);
-  pos = starC + relS;
-  pos.y += sin(starSpin * 0.88 + aMotionBob.y) * aMotionBob.x;
-
-  vec3 relN = pos - nebC;
-  relN = rotateTiltedGalaxyY(relN, nebulaSpin, nebTilt);
-  relN = rotateGalaxyY(relN, nebulaOrbit);
-  pos = nebC + relN;
+  if (abs(clusterSpin) > 0.0001 || abs(clusterOrbit) > 0.0001) {
+    vec3 relC = pos - clusterC;
+    relC = rotateTiltedGalaxyY(relC, clusterSpin, clusterTilt);
+    if (abs(clusterOrbit) > 0.0001) {
+      relC = rotateGalaxyY(relC, clusterOrbit);
+    }
+    pos = clusterC + relC;
+  }
 
   vec3 relG = pos - hub;
-  relG = rotateTiltedGalaxyY(relG, galaxySpin, galTilt);
-  relG = rotateGalaxyY(relG, galaxyOrbit);
+  float galR = max(length(relG.xz), 6.0);
+  float diffSpin = galaxySpin * (1.15 / pow(galR, 0.38));
+  relG = rotateTiltedGalaxyY(relG, diffSpin, galTilt);
+  if (abs(galaxyOrbit) > 0.0001) {
+    relG = rotateGalaxyY(relG, galaxyOrbit);
+  }
   pos = hub + relG;
+  pos.y += sin(diffSpin * 0.6 + aMotionBob.y) * aMotionBob.x;
 
   pos = rotateGalaxyY(pos, universeOrbit);
   return pos;

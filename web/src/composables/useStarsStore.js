@@ -9,12 +9,10 @@ import {
 } from '../utils/stars-filter';
 import { normalizeUiLocale, resolveUiLocale } from '../i18n';
 import {
-  buildGalaxyIndexMap,
   buildGalaxyVirtualIndexMap,
   GALAXY_LAYOUT_CACHE_TAG,
   GALAXY_LAYOUT_VERSION,
   hasValidGalaxyLayout,
-  isVirtualGalaxyLayout,
 } from '../galaxy/layout-payload.js';
 import { expandReposToVirtualStars } from '../galaxy/virtual-stars.js';
 import {
@@ -391,22 +389,12 @@ async function loadSiteMeta() {
   }
 }
 
-function pickGalaxyLayoutPayload(remote, embedded) {
-  const remoteOk = hasValidGalaxyLayout(remote);
-  const embeddedOk = hasValidGalaxyLayout(embedded);
-  if (remoteOk && embeddedOk) {
-    const rv = remote.version ?? 0;
-    const ev = embedded.version ?? 0;
-    return rv >= ev ? remote : embedded;
-  }
-  if (remoteOk) return remote;
-  if (embeddedOk) return embedded;
-  return null;
+function pickGalaxyLayoutPayload(remote) {
+  return hasValidGalaxyLayout(remote) ? remote : null;
 }
 
 async function loadGalaxyLayout() {
   const base = import.meta.env.BASE_URL || '/';
-  const embedded = payload.value?.galaxy ?? null;
   let remote = null;
 
   try {
@@ -419,14 +407,14 @@ async function loadGalaxyLayout() {
     /* ignore */
   }
 
-  const picked = pickGalaxyLayoutPayload(remote, embedded);
+  const picked = pickGalaxyLayoutPayload(remote);
   if (picked) galaxyLayoutPayload.value = picked;
   return picked;
 }
 
 export function ensureGalaxyLayout() {
   const cached = galaxyLayoutPayload.value;
-  if (cached && isVirtualGalaxyLayout(cached)) {
+  if (cached && hasValidGalaxyLayout(cached)) {
     return Promise.resolve(cached);
   }
   if (!galaxyLayoutPromise) {
@@ -534,14 +522,10 @@ export function useStarsStore() {
     return DEFAULT_SITE_TITLE;
   });
   const stats = computed(() => payload.value?.stats || null);
-  const galaxyLayout = computed(
-    () => galaxyLayoutPayload.value ?? payload.value?.galaxy ?? null
-  );
-  const galaxyIndexMap = computed(() => buildGalaxyIndexMap(items.value));
+  const galaxyLayout = computed(() => galaxyLayoutPayload.value);
   const galaxyVirtualIndexMap = computed(() =>
     buildGalaxyVirtualIndexMap(expandReposToVirtualStars(items.value))
   );
-  const galaxyUsesVirtualLayout = computed(() => isVirtualGalaxyLayout(galaxyLayout.value));
 
   const languageOptions = computed(() =>
     buildLanguageOptions(filterStars(items.value, currentFilterState({ language: 'all' })))
@@ -703,9 +687,7 @@ export function useStarsStore() {
     pageTitle: { get: () => pageTitle.value },
     stats: { get: () => stats.value },
     galaxyLayout: { get: () => galaxyLayout.value },
-    galaxyIndexMap: { get: () => galaxyIndexMap.value },
     galaxyVirtualIndexMap: { get: () => galaxyVirtualIndexMap.value },
-    galaxyUsesVirtualLayout: { get: () => galaxyUsesVirtualLayout.value },
     licenseOptions: { get: () => licenseOptions.value },
     yearOptions: { get: () => yearOptions.value },
     languageOptions: { get: () => languageOptions.value },

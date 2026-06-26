@@ -2,7 +2,7 @@
 
 **[中文](README.md)**
 
-Fork and go: fetch your starred repositories, build a Vue SPA, and deploy to GitHub Pages. The UI supports **Simplified Chinese / English** (header toggle or `?lang=en`).
+Fork and go: fetch your starred repositories, build a Vue SPA, and deploy to GitHub Pages. Switch between **list browsing** and a **Three.js cosmic star map**. The UI supports **Simplified Chinese / English** (header toggle or `?lang=en`).
 
 ---
 
@@ -29,12 +29,12 @@ CI uses **`github.repository_owner`** and the **current repository name** to fet
 | **Daily 00:00 UTC** | Scheduled sync of latest stars                         |
 | **Manual**          | Actions → _Build and Deploy My Stars_ → _Run workflow_ |
 
-Pipeline: `generate` (GitHub API → `stars.json`) → `build:pages` (Vue → `web/dist`) → push to **`gh-pages`** (not `main`).
+Pipeline: `generate` (GitHub API → `stars.json` + precomputed `galaxy.json`) → `build:pages` (Vue → `web/dist`) → push to **`gh-pages`** (not `main`).
 
 ### Fork notes
 
 - **No deploy on fork alone**: complete step 4 above (manual Run workflow or push) before your site shows your own stars.
-- **`main` has no build artifacts**: `web/dist`, `web/public/stars.json`, and `site.json` are gitignored.
+- **`main` has no build artifacts**: `web/dist`, `web/public/stars.json`, `web/public/galaxy.json`, and `site.json` are gitignored.
 - **If you forked upstream `gh-pages`**: Pages may briefly show the upstream site until your workflow succeeds; run CI once or delete `gh-pages` on your fork and redeploy.
 - **Renaming the repo**: CI updates `owner` / `repoName` in data and the Pages base path; change `pageConfig.siteName` in `config.json` yourself if you want a new title.
 
@@ -49,7 +49,7 @@ CI `build:pages` reads **`deployConfig.pagesBase`** in `config.json` for the ass
 | `"repo"` (default) | `https://<user>.github.io/<repo-name>/`   | Prefix `/<repo-name>/`; default fork setup |
 | `"root"`           | Custom domain root `https://your-domain/` | Prefix `/`; use with a custom domain       |
 
-**Impact on features**: Filtering, UI languages, `?lang=en`, and CI star fetching are unchanged. A mismatched `pagesBase` usually causes **404s for assets or JSON** (blank page or endless loading).
+**Impact on features**: Filtering, UI languages, `?lang=en`, star map view, and CI star fetching are unchanged. A mismatched `pagesBase` usually causes **404s for assets or JSON** (blank page or endless loading).
 
 **Custom domain steps**:
 
@@ -184,7 +184,8 @@ Both: `generate` + matching `build` + `vite preview` (port 4173). If your repo i
 | `npm run dev`           | Fetch stars + Vite (`:4173`, HMR)            |
 | `npm run dev:ui`        | Vite only, no fetch                          |
 | `npm run dev:stop`      | Free port **4173** (cross-platform)          |
-| `npm run generate`      | Write `web/public/stars.json`, `site.json`   |
+| `npm run generate`      | Write `web/public/stars.json`, `galaxy.json`, `site.json` |
+| `npm run generate:galaxy` | Recompute `galaxy.json` from existing `stars.json` (no API fetch) |
 | `npm run build`         | Local build (`base=/`)                       |
 | `npm run build:pages`   | GitHub Pages build (`base` from `pagesBase`) |
 | `npm run preview`       | generate + build + preview                   |
@@ -206,6 +207,43 @@ GitHub Stars–like browsing; one `stars.json`; filtering in the browser:
 | **Sort**         | Recently starred / Recently active / Most stars                                                    |
 | **Virtual list** | Smooth scrolling for thousands of items                                                            |
 | **Stats**        | Totals, language/license breakdown, etc.                                                           |
+| **View modes**   | List / cosmic star map (WebGL; star map disabled when WebGL is unavailable)                        |
+
+### Cosmic star map
+
+Use the header **List / Star map** toggle. The map shares the same filtered set as the list (search, language, license, sort, etc.) and adds legend filters.
+
+**Spatial model**
+
+| Layer | Meaning |
+| ----- | ------- |
+| **Language clusters** | Repos grouped by language — each cluster acts as a “galaxy” |
+| **Topic rings / clouds** | Popular topics within a language form rings or clouds |
+| **Virtual stars** | One star per topic per repo; a placeholder star if the repo has no topics |
+| **Point size** | Mapped from repo star count percentiles; brightness includes recency and other visual weights |
+
+Layout is precomputed at `generate` time into `galaxy.json` and loaded on demand; if missing, the browser falls back to the same v3 runtime layout algorithm.
+
+**Interaction**
+
+| Action | Description |
+| ------ | ----------- |
+| **Left drag** | Orbit |
+| **Scroll / `+` `-`** | Zoom (eased) |
+| **Middle drag / pinch** | Zoom |
+| **Right drag** | Pan |
+| **Click a star** | Fly in and open details |
+| **Hover** | Show repo name and star count |
+| **Arrow keys** | Nudge the view |
+| **`R`** | Reset to default view |
+| **Auto-rotate toggle** | Toolbar control for camera spin |
+| **Legend** | Highlight by language or star tier (50k+ / 10k+ / 1k+ / &lt;1k) |
+| **Focus** | Fly to the first-starred repo or the repo in the detail panel |
+| **Expand** | Fill the content area with the map (desktop) |
+
+**Detail panel**: compact by default; expand for full info; **Locate** button (or **`L`**) flies to the current repo; **`Esc`** closes.
+
+**Note**: while auto-rotate is on, motion freezes briefly on pointer down to improve click accuracy; moving the cursor over the canvas does **not** pause rotation.
 
 ### UI languages (site chrome)
 
@@ -224,6 +262,11 @@ GitHub Stars–like browsing; one `stars.json`; filtering in the browser:
 | `stars-year`    | Year starred                                          |
 | `stars-type`    | `sources` / `forks`                                   |
 | `stars-sort`    | `recently_starred` / `recently_active` / `most_stars` |
+| `stars-view`    | `galaxy` opens the star map view                      |
+| `stars-focus`   | Repo id to focus in the map (e.g. `owner/repo`)       |
+| `stars-galaxy-expand` | `1` expands the map to fill the content area  |
+
+Example: `?stars-view=galaxy&stars-focus=vuejs/core&lang=en`
 
 ---
 
@@ -232,7 +275,9 @@ GitHub Stars–like browsing; one `stars.json`; filtering in the browser:
 | Stage   | Approach                                                     |
 | ------- | ------------------------------------------------------------ |
 | Data    | Single `stars.json` fetch (~1–2MB for ~3k stars)             |
+| Star map layout | Precomputed in `galaxy.json` at build time; map chunk loaded async |
 | List    | `@tanstack/vue-virtual` — visible rows only                  |
+| Star map | WebGL + Three.js; renders while visible; pauses when the tab is hidden |
 | Filters | In-memory filter/sort; debounced search (`searchDebounceMs`) |
 
 For very large lists, set `pageConfig.maxItems` in `config.json` or tune `virtualRowHeight`.
@@ -266,9 +311,14 @@ After edits: **local** — `generate` / `dev` again; **online** — push to `mai
 ```
 .github/workflows/build.yml   # Build & deploy
 web/                          # Vue 3 + Vite SPA
-  public/                     # stars.json, site.json (generated, not committed)
-  src/                        # Components, state, i18n, styles
+  public/                     # stars.json, galaxy.json, site.json (generated, not committed)
+  src/
+    components/               # List, star map, filters, stats UI
+    galaxy/                   # Layout, motion, picking, zoom (Three.js)
+    composables/              # State, theme, i18n
 generate.js                   # GitHub Star API → JSON
+scripts/
+  compute-galaxy-layout.mjs   # Star map layout precomputation
 config.json                   # Page & deploy settings
 package.json
 ```

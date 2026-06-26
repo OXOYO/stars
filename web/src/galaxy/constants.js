@@ -25,6 +25,8 @@ export const GALAXY = {
   VOLUME_SPREAD_Y: 11,
   /** topic 在语言扇区内的径向微偏移 */
   TOPIC_RADIAL_JITTER: 1.1,
+  /** topic 星环：关闭后 topic 仅用弥散星云，避免几何亮环 */
+  TOPIC_RINGS_ENABLED: false,
   /** topic 星环：同语言+同 topic 至少 N 颗才成环（固定阈值，筛选不降低） */
   TOPIC_RING_MIN_COUNT: 10,
   /** 每语言最多环数 = min(TOPIC_RING_MAX_COUNT, ceil(topic种类 × TOPIC_RING_MAX_PERCENT)) */
@@ -52,34 +54,34 @@ export const LEGEND_LANG_TOP = 10;
 export const GALAXY_TILT_X = 0;
 
 /**
- * 分层天文运动：宇宙 → 星系 → 星云 → 单星，各层独立角速度与相位
+ * 分层天文运动：宇宙漂移 + 星系差动自转（无嵌套公转环）
+ * 参考：旋臂恒星共转盘面；开放星团随盘面整体转动，不独立绕圈
  */
 export const GALAXY_MOTION = {
   /** 全局运动速率缩放（拖拽环顾、星系差速、自动旋转） */
-  SPEED_SCALE: 0.82,
+  SPEED_SCALE: 0.72,
   /** 全场极慢漂移（叠加在每星宇宙层之上） */
-  UNIVERSE_SPIN: 0.000033,
+  UNIVERSE_SPIN: 0.000028,
   /** 语言星系中心绕宇宙原点公转 */
-  HUB_ORBIT_BASE: 0.0055,
-  HUB_ORBIT_SPREAD: 1.15,
-  /** 星系绕自身中心自转 */
-  GALAXY_SPIN_BASE: 0.026,
-  GALAXY_SPIN_SPREAD: 1.22,
-  /** 星系内轨道起伏（相对 hub） */
-  GALAXY_ORBIT_BASE: 0.008,
-  GALAXY_ORBIT_SPREAD: 1.02,
-  /** 星云（topic 团）自转 */
-  NEBULA_SPIN_BASE: 0.02,
-  NEBULA_SPIN_SPREAD: 1.05,
-  /** 星云内轨道 */
-  NEBULA_ORBIT_BASE: 0.007,
-  NEBULA_ORBIT_SPREAD: 0.95,
-  TOPIC_MIN_COUNT: 10,
-  /** 单星微自转 / 微公转 */
-  STAR_SPIN_BASE: 0.026,
-  STAR_SPIN_SPREAD: 1.08,
-  STAR_ORBIT_BASE: 0.008,
-  STAR_ORBIT_SPREAD: 1.0,
+  HUB_ORBIT_BASE: 0.0016,
+  HUB_ORBIT_SPREAD: 0.75,
+  /** 星系绕 hub 差动自转（内快外慢） */
+  GALAXY_SPIN_BASE: 0.016,
+  GALAXY_SPIN_SPREAD: 0.92,
+  /** 已弃用：嵌套公转会产生可见亮环，置 0 */
+  GALAXY_ORBIT_BASE: 0,
+  GALAXY_ORBIT_SPREAD: 0,
+  /** 开放星团整体微自转（同盘面，非独立轨道） */
+  CLUSTER_SPIN_BASE: 0.003,
+  CLUSTER_SPIN_SPREAD: 0.55,
+  CLUSTER_ORBIT_BASE: 0,
+  CLUSTER_ORBIT_SPREAD: 0,
+  TOPIC_MIN_COUNT: 6,
+  /** 单星无公转；仅保留极弱 Y 起伏模拟视向速度 */
+  STAR_SPIN_BASE: 0,
+  STAR_SPIN_SPREAD: 0,
+  STAR_ORBIT_BASE: 0,
+  STAR_ORBIT_SPREAD: 0,
   STAR_BOB_BASE: 0.85,
   STAR_BOB_SPREAD: 2.0,
   /** 星系际星：加强宇宙漂移、减弱星系绑定 */
@@ -109,18 +111,28 @@ export const PARTICLE_VISUAL_WEIGHTS = {
   FORKS: 0.16,
 };
 
-/** 星点尺寸区间（attribute aSize） */
+/** 星点尺寸区间（attribute aSize）— 由分位排名映射，见 buildStarSizes */
 export const PARTICLE_SIZE_RANGE = {
-  MIN: 0.1,
-  MAX: 2.75,
-  GAMMA: 0.82,
+  MIN: 0.035,
+  MAX: 3.6,
+  /** @deprecated 单仓估算仍可用于测试 */
+  GAMMA: 0.95,
+  /** 分位曲线：<1 时头部仓更大、尾部更小 */
+  RANK_GAMMA: 0.55,
+};
+
+/** 星点尺寸分数权重（不含推送时效） */
+export const PARTICLE_SIZE_WEIGHTS = {
+  STARS: 0.58,
+  WATCHERS: 0.24,
+  FORKS: 0.18,
 };
 
 /** 星点亮度区间（attribute aBright） */
 export const PARTICLE_BRIGHT_RANGE = {
-  MIN: 0.12,
-  MAX: 0.82,
-  GAMMA: 0.85,
+  MIN: 0.08,
+  MAX: 0.92,
+  GAMMA: 1.28,
 };
 
 /** 3D 力导向布局（星点坐标） */
@@ -191,52 +203,60 @@ export const HIERARCHY_LAYOUT = {
 };
 
 /**
- * 宇宙级摆位（参考哈勃深场 / 宇宙网）：
- * - 语言 → 独立倾斜星系（椭球盘，非单一大盘螺旋）
- * - topic → 仓周星云晕
- * - 场星 → 星系际与臂间弥散
+ * 宇宙级摆位 — Phase 2：单一密度场 + 语言软聚类（哈勃深场式交融）
+ * - 全仓共享一个宇宙球体密度场
+ * - 语言 = 重叠的高斯吸引子（无硬 hub 边界）
+ * - topic → 开放星团；仓 → 恒星
  */
 export const COSMIC_UNIVERSE = {
-  /** 仓落在星系际（宇宙背景场星） */
-  INTERGALACTIC_RATIO: 0.11,
-  /** 单语言星系半径系数（相对宇宙跨度） */
-  GALAXY_BASE_FRAC: 0.21,
-  GALAXY_SIZE_POWER: 0.46,
-  /** 星系中心分布半径（越小 → 语言星系彼此更近） */
-  HUB_RADIUS_FRAC: 0.48,
-  HUB_Y_FLATTEN: 0.9,
-  /** 星系内盘面扁率、臂间场星 */
-  GALAXY_DISK_Y: 0.36,
-  GALAXY_FIELD_RATIO: 0.52,
-  GALAXY_ARM_STRENGTH: 0.11,
+  /** 纯场星：均匀撒在整个宇宙球，不归属任何语言核 */
+  INTERGALACTIC_RATIO: 0.26,
+  /** 语言吸引子中心散布半径（占宇宙跨度） */
+  ATTRACTOR_CORE_FRAC: 0.36,
+  /** 语言高斯核 σ（越大 → 语言团越交融） */
+  KERNEL_SIGMA_FRAC: 0.26,
+  KERNEL_SIGMA_POWER: 0.22,
+  /** 主语言核与次核的位置混合比（模拟深场交界模糊） */
+  KERNEL_OVERLAP_BLEED: 0.16,
+  /** 大尺度丝状扰动（宇宙网弱结构） */
+  FIELD_FILAMENT: 0.045,
+  /** @deprecated 兼容 motion/gas：等同 KERNEL_SIGMA_FRAC */
+  GALAXY_BASE_FRAC: 0.26,
+  GALAXY_SIZE_POWER: 0.22,
+  HUB_RADIUS_FRAC: 0.36,
+  HUB_Y_FLATTEN: 1.0,
+  GALAXY_DISK_Y: 0.78,
+  GALAXY_FIELD_RATIO: 1.0,
+  GALAXY_ARM_STRENGTH: 0,
   GALAXY_ARMS: 2,
-  /** 星系整体随机倾角 */
-  GALAXY_TILT_SPREAD: 0.72,
-  /** 虚拟星云晕 */
-  NEBULA_WISP: 0.28,
-  TOPIC_NEBULA_BOOST: 1.12,
-  /** 语言星系着色气体云：每星系粒子数 */
-  GAS_PARTICLES_PER_GALAXY: 420,
-  /** 每星系核心填充粒子（填实中心，避免环状空洞） */
-  GAS_CORE_FILL_COUNT: 80,
-  /** 仅仓数排名前一定比例的语言显示气体云 */
-  GAS_LANG_TOP_PERCENT: 0.2,
-  /** 气体云盘面半径相对星系半径（≈1 覆盖整星系） */
-  GAS_DISK_RADIUS_MULT: 0.96,
-  GAS_DISK_RADIUS_JITTER: 0.06,
-  /** 气体云竖直厚度 = 星系盘面扁率 × 该系数 */
-  GAS_Y_DISK_MULT: 1.02,
-  INTERGALACTIC_SPREAD: 0.42,
-  /** 最终 Y 压扁：接近 1 保持宇宙球体体积 */
-  UNIVERSE_Y_FLATTEN: 0.9,
+  GALAXY_TILT_SPREAD: 1.05,
+  CLUSTER_WISP: 0.22,
+  MULTI_TOPIC_SIBLING: 0.38,
+  GAS_PARTICLES_PER_GALAXY: 132,
+  /** 每语言暗尘粒子（NormalBlending，填 clump 中心） */
+  GAS_DUST_PER_GALAXY: 32,
+  GAS_CORE_FILL_COUNT: 0,
+  GAS_LANG_TOP_PERCENT: 0.5,
+  GAS_DISK_RADIUS_MULT: 1.12,
+  GAS_DISK_RADIUS_JITTER: 0.14,
+  GAS_Y_DISK_MULT: 1.0,
+  INTERGALACTIC_SPREAD: 0.62,
+  UNIVERSE_Y_FLATTEN: 1.0,
+  /** 全局 H II 发射雾（独立于语言层，撒满密度场） */
+  FIELD_GAS_COUNT: 240,
+  FIELD_DUST_COUNT: 52,
 };
-
-/** 形态学摆位：局部星云散布参数 */
 export const MORPHOLOGY_LAYOUT = {
-  VOLUME_SCALE: 0.62,
-  NEBULA_SPREAD_MIN: 1.55,
-  NEBULA_SPREAD_MAX: 4.6,
-  DUST_RATIO: 0.16,
+  VOLUME_SCALE: 0.68,
+  /** 星团最小散布半径 */
+  CLUSTER_SPREAD_MIN: 0.85,
+  /** 星团最大散布半径（随团内仓数对数增长） */
+  CLUSTER_SPREAD_MAX: 2.6,
+  CLUSTER_SPREAD_LOG: 0.72,
+  /** 单仓恒星在锚点附近的抖动（无 topic 或场星） */
+  REPO_JITTER_MIN: 0.35,
+  REPO_JITTER_MAX: 1.15,
+  DUST_RATIO: 0.08,
   GROUP_SPREAD_MIN: 12,
   GROUP_SPREAD_PER_STAR: 1.85,
   RING_R_BASE: 2.8,
@@ -256,44 +276,68 @@ export const MORPHOLOGY_LAYOUT = {
 
 /** 星云缩放与拾取 */
 export const SCENE_FOG = {
-  /** FogExp2 密度：仅作用于星点/尘粒着色器，气体云不受雾衰减 */
-  DENSITY: 0.0055,
+  /** FogExp2 密度：压低以免整体发灰发糊 */
+  DENSITY: 0.0018,
 };
 
 export const GALAXY_ZOOM = {
-  /** OrbitControls 最近距离 */
-  MIN_DISTANCE: 0.42,
+  /** OrbitControls 最近距离硬下限（越小 = 可放得越大） */
+  MIN_DISTANCE: 0.08,
   /** 最远距离下限（实际会按星云尺度动态放大） */
   MAX_DISTANCE: 800,
   /** 缩放灵敏度（按钮与滚轮共用） */
   ZOOM_SPEED: 1.0,
   /** 每次标准滚轮刻度在 log 缩放区间内前进的占比（全范围恒定步进） */
-  RANGE_FRACTION_PER_NOTCH: 0.048,
+  RANGE_FRACTION_PER_NOTCH: 0.055,
   /** 浏览器 wheel deltaY 与「一格」的换算 */
   WHEEL_NOTCH: 100,
-  /** 宇宙内观测：最远缩放 = maxR × 该系数（越大可缩得越远） */
+  /** 宇宙内观测：最远缩放 = maxR × 该系数 */
   OBSERVER_MAX_DISTANCE_MULT: 1.62,
-  /** 宇宙内观测：最近缩放 = anchorDist × 该系数（越小可放得越大/更近） */
-  OBSERVER_MIN_DISTANCE_MULT: 0.08,
-  /** 宇宙内观测：初始视距 = maxR × 该系数（过大需缩远才能看全团） */
-  OBSERVER_DEFAULT_DISTANCE_MULT: 0.52,
+  /** 宇宙内观测：最近缩放 = maxR × 该系数（相对星系半径） */
+  OBSERVER_MIN_DISTANCE_FRAC: 0.0028,
+  /** @deprecated 保留兼容 */
+  OBSERVER_MIN_DISTANCE_MULT: 0.028,
+  /** 宇宙内观测：初始视距 = maxR × 该系数 */
+  OBSERVER_DEFAULT_DISTANCE_MULT: 0.28,
+  /** 天文模式：初始视线方向（略俯视角，便于 orbit） */
+  OBSERVER_VIEW_DIR: [0.34, 0.46, 0.82],
+  /** OrbitControls 自动环绕速度 */
+  AUTO_ROTATE_SPEED: 0.32,
+  /** 相机缓动时长（毫秒） */
+  CAMERA_FOCUS_MS: 760,
+  CAMERA_DOLLY_MS: 260,
+  CAMERA_RESET_MS: 680,
+  /** 双指 pinch：每像素间距变化换算为 dolly 档位数 */
+  PINCH_NOTCH_PER_PX: 0.006,
+  /** 中键拖拽：每像素纵向位移换算为 dolly 档位数 */
+  MIDDLE_DRAG_NOTCH_PER_PX: 0.014,
+  /** 方向键 orbit 步长（弧度） */
+  KEYBOARD_ORBIT_AZIMUTH: 0.07,
+  KEYBOARD_ORBIT_POLAR: 0.05,
   /** 屏幕像素：星点最大渲染尺寸 */
-  POINT_SIZE_MAX: 110,
-  /** 星点视距缩放：深度下限（越小拉近时点越大；原先 20 导致近距观感不变） */
-  POINT_VIEW_Z_MIN: 4.0,
-  POINT_DIST_SCALE_DIV: 300.0,
-  POINT_DIST_SCALE_MIN: 4.5,
-  POINT_DIST_SCALE_MAX: 110.0,
+  POINT_SIZE_MAX: 78,
+  /** 星点视距缩放：深度下限（越小拉近时点越大） */
+  POINT_VIEW_Z_MIN: 0.42,
+  POINT_DIST_SCALE_DIV: 200.0,
+  POINT_DIST_SCALE_MIN: 1.15,
+  POINT_DIST_SCALE_MAX: 52.0,
   /** 气体粒子视距缩放（与星点同理） */
   GAS_VIEW_Z_MIN: 4.0,
   GAS_DIST_SCALE_DIV: 220.0,
   GAS_DIST_SCALE_MIN: 2.8,
-  GAS_DIST_SCALE_MAX: 64.0,
-  GAS_POINT_SIZE_MAX: 64.0,
-  /** Points 射线拾取阈值（世界单位，随距离在组件内缩放） */
-  PICK_THRESHOLD: 6,
-  /** 定位单颗星时的包围尺度与距离上限 */
-  FOCUS_STAR_SPAN: 5,
-  FOCUS_STAR_PADDING: 2.35,
-  FOCUS_STAR_MAX_DISTANCE: 38,
+  GAS_DIST_SCALE_MAX: 22.0,
+  GAS_POINT_SIZE_MAX: 42.0,
+  GAS_DUST_POINT_SIZE_MAX: 14.0,
+  /** Points 屏幕拾取：像素半径下限 / 上限 / 相对星点尺寸比例 */
+  PICK_RADIUS_MIN: 8,
+  PICK_RADIUS_MAX: 40,
+  PICK_RADIUS_SCALE: 0.72,
+  /** 定位单颗星：目标屏幕像素半径（用于反推视距） */
+  FOCUS_TARGET_POINT_PX: 34,
+  /** 定位单颗星时的视距下限 / 上限（世界单位） */
+  FOCUS_STAR_MIN_DISTANCE: 0.09,
+  FOCUS_STAR_MAX_DISTANCE: 3.4,
+  /** @deprecated 仅无 aSize 时的包围盒回退 */
+  FOCUS_STAR_SPAN: 2.2,
+  FOCUS_STAR_PADDING: 1.12,
 };

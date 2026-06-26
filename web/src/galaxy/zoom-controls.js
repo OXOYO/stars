@@ -4,14 +4,14 @@ import { GALAXY_ZOOM } from './constants.js';
 const _dollyDir = new THREE.Vector3();
 
 /**
- * 在 [minDistance, maxDistance] 的 log 区间内按固定比例步进，避免越放大/越缩小越慢
+ * 计算 dolly 后的相机位姿（不写入场景）
  * @param {THREE.OrbitControls} controls
  * @param {THREE.PerspectiveCamera} camera
- * @param {number} signedNotches 正数拉远，负数拉近
- * @param {{ zoomToCursor?: boolean, ndc?: { x: number, y: number } }} [opts]
+ * @param {number} signedNotches
+ * @returns {{ position: THREE.Vector3, target: THREE.Vector3 } | null}
  */
-export function dollyCameraUniformRange(controls, camera, signedNotches, opts = {}) {
-  if (!signedNotches) return;
+export function resolveDollyCameraView(controls, camera, signedNotches) {
+  if (!signedNotches) return null;
 
   const offset = new THREE.Vector3().subVectors(camera.position, controls.target);
   const distance = Math.max(offset.length(), 1e-8);
@@ -24,9 +24,38 @@ export function dollyCameraUniformRange(controls, camera, signedNotches, opts = 
   const logDelta = signedNotches * GALAXY_ZOOM.RANGE_FRACTION_PER_NOTCH * logRange;
   const newLogDist = Math.max(logMin, Math.min(logMax, logDist + logDelta));
   const newDistance = Math.exp(newLogDist);
-  const radiusDelta = distance - newDistance;
+
+  offset.setLength(newDistance);
+  return {
+    position: controls.target.clone().add(offset),
+    target: controls.target.clone(),
+  };
+}
+
+/**
+ * 在 [minDistance, maxDistance] 的 log 区间内按固定比例步进，避免越放大/越缩小越慢
+ * @param {THREE.OrbitControls} controls
+ * @param {THREE.PerspectiveCamera} camera
+ * @param {number} signedNotches 正数拉远，负数拉近
+ * @param {{ zoomToCursor?: boolean, ndc?: { x: number, y: number } }} [opts]
+ */
+export function dollyCameraUniformRange(controls, camera, signedNotches, opts = {}) {
+  if (!signedNotches) return;
 
   if (opts.zoomToCursor && opts.ndc) {
+    const offset = new THREE.Vector3().subVectors(camera.position, controls.target);
+    const distance = Math.max(offset.length(), 1e-8);
+    const minD = controls.minDistance;
+    const maxD = controls.maxDistance;
+    const logMin = Math.log(minD);
+    const logMax = Math.log(maxD);
+    const logRange = Math.max(logMax - logMin, 1e-8);
+    const logDist = Math.log(distance);
+    const logDelta = signedNotches * GALAXY_ZOOM.RANGE_FRACTION_PER_NOTCH * logRange;
+    const newLogDist = Math.max(logMin, Math.min(logMax, logDist + logDelta));
+    const newDistance = Math.exp(newLogDist);
+    const radiusDelta = distance - newDistance;
+
     _dollyDir.set(opts.ndc.x, opts.ndc.y, 1).unproject(camera).sub(camera.position).normalize();
     if (_dollyDir.lengthSq() > 1e-10) {
       camera.position.addScaledVector(_dollyDir, radiusDelta);
@@ -35,8 +64,9 @@ export function dollyCameraUniformRange(controls, camera, signedNotches, opts = 
       camera.position.copy(controls.target).add(offset);
     }
   } else {
-    offset.setLength(newDistance);
-    camera.position.copy(controls.target).add(offset);
+    const view = resolveDollyCameraView(controls, camera, signedNotches);
+    if (!view) return;
+    camera.position.copy(view.position);
   }
   controls.update();
 }
@@ -145,33 +175,92 @@ export function applyCameraView(controls, camera, view) {
 }
 
 /**
- * 定位到单颗星：按 FOV 计算合适视距，而非沿用全景相机距离
+ * 按目标屏幕像素反推飞入视距（与 StarsGalaxyView 星点顶点公式一致）
+ * @param {number} aSize
+ * @param {number} [bright=0.5]
+ * @param {number} [pixelRatio=1]
+ */
+export function focusDistanceForStar(aSize, bright = 0.5, pixelRatio = 1) {
+  const targetPx = GALAXY_ZOOM.FOCUS_TARGET_POINT_PX ?? 34;
+  const minD = GALAXY_ZOOM.FOCUS_STAR_MIN_DISTANCE ?? 0.09;
+  const maxD = GALAXY_ZOOM.FOCUS_STAR_MAX_DISTANCE ?? 3.4;
+  const brightMul = 0.36 + Math.max(0, Math.min(1, bright)) * 0.2;
+  const denom = Math.max(aSize * brightMul * pixelRatio, 0.028);
+  const distScale = targetPx / denom;
+  const viewZ =
+    GALAXY_ZOOM.POINT_DIST_SCALE_DIV /
+    Math.max(distScale, GALAXY_ZOOM.POINT_DIST_SCALE_MIN ?? 1.15);
+  return Math.max(minD, Math.min(maxD, viewZ));
+}
+
+/**
+ * 计算飞入单星后的相机位姿（不写入场景）
  * @param {THREE.OrbitControls} controls
  * @param {THREE.PerspectiveCamera} camera
  * @param {THREE.Vector3} worldPoint
- * @param {{ span?: number, padding?: number, maxDistance?: number }} [opts]
+ * @param {{ span?: number, padding?: number, maxDistance?: number, aSize?: number, bright?: number, pixelRatio?: number }} [opts]
+ * @returns {{ position: THREE.Vector3, target: THREE.Vector3 }}
  */
-export function focusCameraOnStarPoint(controls, camera, worldPoint, opts = {}) {
-  const span = opts.span ?? GALAXY_ZOOM.FOCUS_STAR_SPAN;
-  const padding = opts.padding ?? GALAXY_ZOOM.FOCUS_STAR_PADDING;
-  const maxDist = opts.maxDistance ?? GALAXY_ZOOM.FOCUS_STAR_MAX_DISTANCE;
-  const minDist = Math.max(controls.minDistance, GALAXY_ZOOM.MIN_DISTANCE);
-
-  const box = new THREE.Box3().setFromCenterAndSize(
-    worldPoint,
-    new THREE.Vector3(span, span, span)
-  );
-  let distance = cameraDistanceForBox(camera, box, padding);
-  distance = Math.max(minDist, Math.min(maxDist, distance));
-
-  const offset = new THREE.Vector3().subVectors(camera.position, controls.target);
-  let viewDir = offset.normalize();
-  if (viewDir.lengthSq() < 1e-8) {
-    viewDir = new THREE.Vector3(0, 0, -1);
+export function resolveFocusCameraView(controls, camera, worldPoint, opts = {}) {
+  let distance;
+  if (opts.aSize != null && Number.isFinite(opts.aSize)) {
+    distance = focusDistanceForStar(opts.aSize, opts.bright ?? 0.5, opts.pixelRatio ?? 1);
+  } else {
+    const span = opts.span ?? GALAXY_ZOOM.FOCUS_STAR_SPAN;
+    const padding = opts.padding ?? GALAXY_ZOOM.FOCUS_STAR_PADDING;
+    const maxDist = opts.maxDistance ?? GALAXY_ZOOM.FOCUS_STAR_MAX_DISTANCE;
+    const box = new THREE.Box3().setFromCenterAndSize(
+      worldPoint,
+      new THREE.Vector3(span, span, span)
+    );
+    distance = cameraDistanceForBox(camera, box, padding);
+    distance = Math.min(maxDist, distance);
   }
 
-  controls.target.copy(worldPoint);
-  camera.position.copy(worldPoint).add(viewDir.multiplyScalar(distance));
+  const minDist = GALAXY_ZOOM.FOCUS_STAR_MIN_DISTANCE ?? 0.09;
+  distance = Math.max(minDist, distance);
+
+  const offset = new THREE.Vector3().subVectors(camera.position, controls.target);
+  let viewDir = offset.lengthSq() > 1e-10 ? offset.normalize() : new THREE.Vector3();
+  if (viewDir.lengthSq() < 1e-10) {
+    viewDir.set(0, 0, 1);
+  }
+
+  const target = worldPoint.clone();
+  const position = worldPoint.clone().add(viewDir.multiplyScalar(distance));
+  return { position, target };
+}
+
+/**
+ * 定位到单颗星：优先按 aSize 反推视距，使星点在屏上足够大
+ * @param {THREE.OrbitControls} controls
+ * @param {THREE.PerspectiveCamera} camera
+ * @param {THREE.Vector3} worldPoint
+ * @param {{ span?: number, padding?: number, maxDistance?: number, aSize?: number, bright?: number, pixelRatio?: number }} [opts]
+ */
+export function focusCameraOnStarPoint(controls, camera, worldPoint, opts = {}) {
+  const view = resolveFocusCameraView(controls, camera, worldPoint, opts);
+  controls.target.copy(view.target);
+  camera.position.copy(view.position);
+  controls.update();
+}
+
+/**
+ * 键盘/按钮微调 orbit（绕 target 旋转）
+ * @param {THREE.OrbitControls} controls
+ * @param {THREE.PerspectiveCamera} camera
+ * @param {number} [dAzimuth=0]
+ * @param {number} [dPolar=0]
+ */
+export function nudgeOrbitCamera(controls, camera, dAzimuth = 0, dPolar = 0) {
+  const offset = new THREE.Vector3().subVectors(camera.position, controls.target);
+  const spherical = new THREE.Spherical().setFromVector3(offset);
+  spherical.theta += dAzimuth;
+  const minPhi = controls.minPolarAngle ?? 0.01;
+  const maxPhi = controls.maxPolarAngle ?? Math.PI - 0.01;
+  spherical.phi = Math.max(minPhi, Math.min(maxPhi, spherical.phi + dPolar));
+  offset.setFromSpherical(spherical);
+  camera.position.copy(controls.target).add(offset);
   controls.update();
 }
 
@@ -207,28 +296,31 @@ export function fitCameraInsideObserver(controls, camera, positions, count, opts
     }
   }
   maxR = Math.max(maxR * padding, 52);
-  const anchorDist = Math.max(maxR * 0.04, 2.5);
 
   controls.minDistance = Math.max(
     GALAXY_ZOOM.MIN_DISTANCE,
-    anchorDist * GALAXY_ZOOM.OBSERVER_MIN_DISTANCE_MULT
+    maxR * (GALAXY_ZOOM.OBSERVER_MIN_DISTANCE_FRAC ?? 0.0045)
   );
   controls.maxDistance = maxR * GALAXY_ZOOM.OBSERVER_MAX_DISTANCE_MULT;
 
   const defaultMult =
-    opts.defaultDistanceMult ?? GALAXY_ZOOM.OBSERVER_DEFAULT_DISTANCE_MULT ?? 0.52;
+    opts.defaultDistanceMult ?? GALAXY_ZOOM.OBSERVER_DEFAULT_DISTANCE_MULT ?? 0.28;
   const defaultDist = Math.max(
     controls.minDistance * 2.2,
-    anchorDist + 2.5,
     Math.min(maxR * defaultMult, controls.maxDistance * 0.82)
   );
 
-  controls.target.set(0, 0, -anchorDist);
-  camera.position.set(0, 0, controls.target.z + defaultDist);
+  const viewDirRaw = opts.viewDir ?? GALAXY_ZOOM.OBSERVER_VIEW_DIR ?? [0.34, 0.46, 0.82];
+  const viewDir = Array.isArray(viewDirRaw)
+    ? new THREE.Vector3(viewDirRaw[0], viewDirRaw[1], viewDirRaw[2]).normalize()
+    : viewDirRaw.clone().normalize();
+
+  controls.target.set(cx, cy, cz);
+  camera.position.copy(controls.target).add(viewDir.multiplyScalar(defaultDist));
   camera.lookAt(controls.target);
 
   const far = Math.max(maxR * 3.6, 2800);
-  const near = Math.min(0.05, maxR * 0.00035);
+  const near = Math.min(0.012, maxR * 0.00012, controls.minDistance * 0.08);
   camera.far = Math.max(camera.far, far);
   camera.near = Math.min(camera.near, near);
   camera.updateProjectionMatrix();

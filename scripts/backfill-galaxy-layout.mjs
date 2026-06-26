@@ -25,9 +25,5 @@ const virtualStars = expandReposToVirtualStars(items);
 console.log(`🌌 正在为 ${items.length} 个仓库 / ${virtualStars.length} 颗虚拟星预计算分层摆位…`);
 const galaxy = computeGalaxyLayout(items);
 fs.writeFileSync(GALAXY_JSON_PATH, JSON.stringify(galaxy), 'utf8');
-if (payload.galaxy) {
-  delete payload.galaxy;
-  fs.writeFileSync(STARS_JSON_PATH, JSON.stringify(payload), 'utf8');
-}
 const sec = ((Date.now() - started) / 1000).toFixed(1);
 console.log(`✅ 已写入 galaxy.json（${sec}s）`);
