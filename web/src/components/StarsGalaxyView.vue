@@ -1,7 +1,8 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { MOUSE } from 'three';
+import { TrackballControls } from 'three/examples/jsm/controls/TrackballControls.js';
 import { buildDustBuffers, buildGalaxyBuffers, ownerSelfRepoId, repoLegendLanguageKey, repoStarTierKey } from '../galaxy/positions.js';
 import { repoLangRgb, nebulaLangTint } from '../galaxy/colors.js';
 import { createNebulaVolumeMesh, disposeNebulaSharedGeometry } from '../galaxy/nebula-volume.js';
@@ -12,6 +13,8 @@ import { LEGEND_LANG_TOP, GALAXY_ZOOM, GALAXY_MOTION, COSMIC_UNIVERSE, SCENE_FOG
 import { GALAXY_MOTION_GLSL, applyGalaxyHubMotionJs, motionWorldPosition } from '../galaxy/motion.js';
 import { createCameraTransition } from '../galaxy/camera-transition.js';
 import {
+  applyTrackballRotate,
+  dollyCameraUniformRange,
   fitCameraInsideObserver,
   nudgeOrbitCamera,
   resolveDollyCameraView,
@@ -71,8 +74,10 @@ const rendererRef = shallowRef(null);
 
 /** @type {THREE.PerspectiveCamera | null} */
 let camera = null;
-/** @type {OrbitControls | null} */
+/** @type {TrackballControls | null} */
 let controls = null;
+/** @type {THREE.Vector3} */
+let autoRotateScratch = null;
 /** @type {THREE.Group | null} */
 let viewPivot = null;
 /** @type {THREE.Group | null} */
@@ -121,10 +126,18 @@ let orbitGestureActive = false;
 let pointerDragMoved = false;
 /** @type {Map<number, { x: number, y: number }>} */
 let activePointers = new Map();
+/** 双指 pinch 缩放中 */
+let pinchActive = false;
 /** @type {number | null} */
 let lastPinchDistance = null;
 /** @type {number | null} */
 let middleDragLastY = null;
+/** 左键拖拽环视：上一帧指针位置 */
+let orbitDragLastX = null;
+/** @type {number | null} */
+let orbitDragLastY = null;
+/** 滚轮 delta 累积，对齐工具栏按钮离散步进 */
+let wheelDeltaAccum = 0;
 /** @type {number | null} */
 let pointerPickIdx = null;
 /** @type {{ motionSec: number, camPos: THREE.Vector3, target: THREE.Vector3 } | null} */
@@ -520,14 +533,24 @@ function getMotionTimeSec() {
 function suspendGalaxyMotion() {
   galaxyMotionFrozen = true;
   autoRotateSuspended = true;
-  if (controls) controls.autoRotate = false;
 }
 
 function syncAutoRotateAfterInteraction() {
   if (pointerDown || orbitGestureActive) return;
   galaxyMotionFrozen = false;
   autoRotateSuspended = false;
-  if (controls && autoRotate.value) controls.autoRotate = true;
+}
+
+function applyCameraAutoRotate(dtSec) {
+  if (!camera || !controls || !autoRotate.value || autoRotateSuspended || galaxyMotionFrozen) return;
+  if (cameraTransition?.active || orbitGestureActive || pinchActive || pointerDown) return;
+  if (!autoRotateScratch) autoRotateScratch = new THREE.Vector3();
+  // 与 OrbitControls autoRotateSpeed 同一换算：2π/60 × speed × dt
+  const angle = ((Math.PI * 2) / 60) * (GALAXY_ZOOM.AUTO_ROTATE_SPEED ?? 0.32) * dtSec;
+  autoRotateScratch.subVectors(camera.position, controls.target);
+  autoRotateScratch.applyAxisAngle(new THREE.Vector3(0, 1, 0), -angle);
+  camera.position.copy(controls.target).add(autoRotateScratch);
+  markRender();
 }
 
 function clearPointerPick() {
@@ -692,28 +715,20 @@ function initScene() {
 
   cameraTransition = createCameraTransition();
 
-  controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.08;
-  controls.enableRotate = true;
-  controls.enablePan = true;
-  controls.screenSpacePanning = true;
-  controls.minPolarAngle = 0.12;
-  controls.maxPolarAngle = Math.PI * 0.78;
+  controls = new TrackballControls(camera, renderer.domElement);
+  controls.rotateSpeed = GALAXY_ZOOM.ORBIT_ROTATE_SPEED ?? 2.4;
+  controls.panSpeed = 0.55;
+  controls.staticMoving = false;
+  controls.dynamicDampingFactor = 0.14;
+  controls.noRotate = true;
+  controls.noZoom = true;
   controls.minDistance = GALAXY_ZOOM.MIN_DISTANCE;
   controls.maxDistance = GALAXY_ZOOM.MAX_DISTANCE;
   controls.target.set(0, 0, 0);
-  controls.enableZoom = false;
-  controls.autoRotate = autoRotate.value;
-  controls.autoRotateSpeed = GALAXY_ZOOM.AUTO_ROTATE_SPEED ?? 0.32;
   controls.mouseButtons = {
-    LEFT: THREE.MOUSE.ROTATE,
+    LEFT: null,
     MIDDLE: null,
-    RIGHT: THREE.MOUSE.PAN,
-  };
-  controls.touches = {
-    ONE: THREE.TOUCH.ROTATE,
-    TWO: null,
+    RIGHT: MOUSE.PAN,
   };
   controls.addEventListener('start', () => {
     cancelCameraTransition();
@@ -788,7 +803,7 @@ function initScene() {
   galaxyGroup.add(dust);
 
   renderer.domElement.addEventListener('pointerdown', onPointerDown, { capture: true });
-  renderer.domElement.addEventListener('pointermove', onPointerMove);
+  renderer.domElement.addEventListener('pointermove', onPointerMove, { passive: false });
   renderer.domElement.addEventListener('pointerup', onPointerUp);
   renderer.domElement.addEventListener('pointercancel', onPointerCancel);
   renderer.domElement.addEventListener('pointerleave', onCanvasLeave);
@@ -1364,6 +1379,34 @@ function pickIndex(clientX, clientY, motionSecOverride) {
   return idx;
 }
 
+function dollyByNotches(notches) {
+  if (!controls || !camera || !notches) return;
+  cancelCameraTransition();
+  dollyCameraUniformRange(controls, camera, notches);
+  markRender();
+}
+
+function beginPinchGesture(event) {
+  if (event?.cancelable) event.preventDefault();
+  pinchActive = true;
+  cancelCameraTransition();
+  clearPointerPick();
+  pointerDown = null;
+  pointerDragMoved = false;
+  orbitGestureActive = false;
+  if (controls) controls.enabled = false;
+  const dist = pinchPointerDistance();
+  if (dist != null) lastPinchDistance = dist;
+  markRender();
+}
+
+function endPinchGestureIfNeeded() {
+  if (activePointers.size >= 2) return;
+  pinchActive = false;
+  lastPinchDistance = null;
+  syncControlsForPointerCount();
+}
+
 function pinchPointerDistance() {
   if (activePointers.size < 2) return null;
   const pts = [...activePointers.values()];
@@ -1374,7 +1417,7 @@ function pinchPointerDistance() {
 
 function syncControlsForPointerCount() {
   if (!controls) return;
-  controls.enabled = activePointers.size < 2;
+  controls.enabled = !pinchActive && activePointers.size < 2;
 }
 
 function isGalaxyKeyboardContext() {
@@ -1439,6 +1482,42 @@ function onGalaxyAuxClick(event) {
   if (event.button === 1) event.preventDefault();
 }
 
+function applyOrbitDragFromPointer(event) {
+  if (!controls || !camera || pinchActive || activePointers.size > 1) return;
+  if (!pointerDown || pointerDown.button !== 0 || !(event.buttons & 1)) return;
+
+  if (orbitDragLastX == null || orbitDragLastY == null) {
+    orbitDragLastX = event.clientX;
+    orbitDragLastY = event.clientY;
+    return;
+  }
+
+  const dx = event.clientX - orbitDragLastX;
+  const dy = event.clientY - orbitDragLastY;
+  orbitDragLastX = event.clientX;
+  orbitDragLastY = event.clientY;
+  if (!dx && !dy) return;
+
+  cancelCameraTransition();
+  if (!orbitGestureActive) {
+    orbitGestureActive = true;
+    suspendGalaxyMotion();
+    const renderer = rendererRef.value;
+    if (renderer) renderer.domElement.style.cursor = 'grabbing';
+  }
+
+  const el = rendererRef.value?.domElement;
+  applyTrackballRotate(
+    controls,
+    camera,
+    dx,
+    dy,
+    el?.clientHeight ?? 480,
+    GALAXY_ZOOM.ORBIT_ROTATE_SPEED ?? 2.4,
+  );
+  markRender();
+}
+
 function trackPointerDrag(event) {
   if (!pointerDown || event.pointerId !== pointerDown.pointerId) return;
   const dx = event.clientX - pointerDown.x;
@@ -1448,6 +1527,12 @@ function trackPointerDrag(event) {
 
 function onPointerDown(event) {
   activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+  if (activePointers.size >= 2) {
+    beginPinchGesture(event);
+    return;
+  }
+
   syncControlsForPointerCount();
 
   if (event.button === 1) {
@@ -1468,9 +1553,8 @@ function onPointerDown(event) {
     pointerId: event.pointerId,
     button: event.button,
   };
-  if (activePointers.size >= 2) {
-    lastPinchDistance = pinchPointerDistance();
-  }
+  orbitDragLastX = event.clientX;
+  orbitDragLastY = event.clientY;
 }
 
 function onPointerMove(event) {
@@ -1478,11 +1562,13 @@ function onPointerMove(event) {
   activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
 
   if (activePointers.size >= 2) {
+    if (event.cancelable) event.preventDefault();
+    if (!pinchActive) beginPinchGesture(event);
     const dist = pinchPointerDistance();
     if (dist != null && lastPinchDistance != null) {
       const delta = dist - lastPinchDistance;
-      if (Math.abs(delta) > 0.8) {
-        animateDolly(-delta * GALAXY_ZOOM.PINCH_NOTCH_PER_PX, GALAXY_ZOOM.CAMERA_DOLLY_MS * 0.85);
+      if (Math.abs(delta) > 0.35) {
+        dollyByNotches(-delta * GALAXY_ZOOM.PINCH_NOTCH_PER_PX);
         lastPinchDistance = dist;
       }
     } else if (dist != null) {
@@ -1491,6 +1577,8 @@ function onPointerMove(event) {
     markRender();
     return;
   }
+
+  applyOrbitDragFromPointer(event);
 
   if (middleDragLastY != null && (event.buttons & 4)) {
     const dy = event.clientY - middleDragLastY;
@@ -1507,8 +1595,7 @@ function onPointerMove(event) {
 
 function onPointerUp(event) {
   activePointers.delete(event.pointerId);
-  syncControlsForPointerCount();
-  if (activePointers.size < 2) lastPinchDistance = null;
+  endPinchGestureIfNeeded();
   if (event.button === 1) middleDragLastY = null;
 
   if (!pointerDown || event.pointerId !== pointerDown.pointerId) return;
@@ -1523,6 +1610,8 @@ function onPointerUp(event) {
   let idx = pointerPickIdx;
   pointerDown = null;
   pointerDragMoved = false;
+  orbitDragLastX = null;
+  orbitDragLastY = null;
   clearPointerPick();
 
   if (isPrimaryTap && isTap && !wasDrag) {
@@ -1533,16 +1622,24 @@ function onPointerUp(event) {
     }
   }
 
+  if (isPrimaryTap) {
+    orbitGestureActive = false;
+    const renderer = rendererRef.value;
+    if (renderer) renderer.domElement.style.cursor = 'grab';
+  }
+
   syncAutoRotateAfterInteraction();
 }
 
 function onPointerCancel(event) {
   activePointers.delete(event.pointerId);
-  syncControlsForPointerCount();
-  if (activePointers.size < 2) lastPinchDistance = null;
+  endPinchGestureIfNeeded();
   middleDragLastY = null;
   pointerDown = null;
   pointerDragMoved = false;
+  orbitDragLastX = null;
+  orbitDragLastY = null;
+  orbitGestureActive = false;
   clearPointerPick();
   syncAutoRotateAfterInteraction();
   const renderer = rendererRef.value;
@@ -1582,10 +1679,12 @@ function onGalaxyWheel(event) {
   else if (event.deltaMode === 2) delta *= 100;
   if (event.ctrlKey) delta *= 2.5;
 
-  const notches = (-delta / GALAXY_ZOOM.WHEEL_NOTCH) * GALAXY_ZOOM.ZOOM_SPEED;
-  if (Math.abs(notches) < 1e-6) return;
+  wheelDeltaAccum += delta;
+  const steps = Math.trunc(-wheelDeltaAccum / GALAXY_ZOOM.WHEEL_NOTCH);
+  if (steps === 0) return;
 
-  animateDolly(notches, GALAXY_ZOOM.CAMERA_DOLLY_MS);
+  wheelDeltaAccum += steps * GALAXY_ZOOM.WHEEL_NOTCH;
+  animateDolly(steps * GALAXY_ZOOM.ZOOM_SPEED, GALAXY_ZOOM.CAMERA_DOLLY_MS);
 }
 
 function zoomIn() {
@@ -1626,7 +1725,6 @@ function resetView() {
 
 function toggleAutoRotate() {
   autoRotate.value = !autoRotate.value;
-  if (controls) controls.autoRotate = autoRotate.value;
   markRender();
 }
 
@@ -1659,16 +1757,17 @@ function onDocumentVisibilityChange() {
 function animate(now) {
   animationId = requestAnimationFrame(animate);
 
+  const dtSec = lastFrameMs > 0 ? Math.min((now - lastFrameMs) * 0.001, 0.05) : 0;
+  lastFrameMs = now;
+
   const cameraAnimating =
     cameraTransition?.active && controls && camera
       ? cameraTransition.tick(now, controls, camera)
       : false;
   if (!cameraAnimating) {
+    applyCameraAutoRotate(dtSec);
     controls?.update();
   }
-
-  const dtSec = lastFrameMs > 0 ? Math.min((now - lastFrameMs) * 0.001, 0.05) : 0;
-  lastFrameMs = now;
 
   if (autoRotate.value && !autoRotateSuspended && !galaxyMotionFrozen) {
     motionTimeSec += dtSec;
@@ -1694,7 +1793,6 @@ function animate(now) {
   const shouldRender =
     needsRender ||
     cameraAnimating ||
-    (controls?.autoRotate && !autoRotateSuspended) ||
     (autoRotate.value && !autoRotateSuspended) ||
     starCount > 0 ||
     now - lastRenderMs >= TWINKLE_FRAME_MS;
@@ -1715,11 +1813,14 @@ function dispose() {
   activePointers.clear();
   lastPinchDistance = null;
   middleDragLastY = null;
+  wheelDeltaAccum = 0;
+  orbitDragLastX = null;
+  orbitDragLastY = null;
   resizeObserver?.disconnect();
   const renderer = rendererRef.value;
   if (renderer) {
     renderer.domElement.removeEventListener('pointerdown', onPointerDown, { capture: true });
-    renderer.domElement.removeEventListener('pointermove', onPointerMove);
+    renderer.domElement.removeEventListener('pointermove', onPointerMove, { passive: false });
     renderer.domElement.removeEventListener('pointerup', onPointerUp);
     renderer.domElement.removeEventListener('pointercancel', onPointerCancel);
     renderer.domElement.removeEventListener('pointerleave', onCanvasLeave);

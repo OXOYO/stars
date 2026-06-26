@@ -2,6 +2,13 @@ import * as THREE from 'three';
 import { GALAXY_ZOOM } from './constants.js';
 
 const _dollyDir = new THREE.Vector3();
+const _orbitEye = new THREE.Vector3();
+const _orbitEyeDir = new THREE.Vector3();
+const _orbitUpDir = new THREE.Vector3();
+const _orbitSideways = new THREE.Vector3();
+const _orbitMoveDir = new THREE.Vector3();
+const _orbitAxis = new THREE.Vector3();
+const _orbitQuat = new THREE.Quaternion();
 
 /**
  * 计算 dolly 后的相机位姿（不写入场景）
@@ -246,22 +253,55 @@ export function focusCameraOnStarPoint(controls, camera, worldPoint, opts = {}) 
 }
 
 /**
+ * Trackball 式自由环视（无 polar 钳制，可越过极点继续拖拽）
+ * @param {{ target: THREE.Vector3 }} controls
+ * @param {THREE.PerspectiveCamera} camera
+ * @param {number} dx 屏幕像素位移
+ * @param {number} dy 屏幕像素位移
+ * @param {number} viewportHeight
+ * @param {number} [rotateSpeed=1]
+ */
+export function applyTrackballRotate(controls, camera, dx, dy, viewportHeight, rotateSpeed = 1) {
+  const moveLen = Math.hypot(dx, dy);
+  if (moveLen < 1e-6 || !controls || !camera) return;
+
+  _orbitEye.subVectors(camera.position, controls.target);
+  const angle = moveLen * rotateSpeed * (2 / Math.max(viewportHeight, 1));
+
+  _orbitEyeDir.copy(_orbitEye).normalize();
+  _orbitUpDir.copy(camera.up).normalize();
+  _orbitSideways.crossVectors(_orbitUpDir, _orbitEyeDir).normalize();
+
+  _orbitUpDir.setLength(dy);
+  _orbitSideways.setLength(dx);
+  _orbitMoveDir.copy(_orbitUpDir).add(_orbitSideways);
+
+  _orbitAxis.crossVectors(_orbitMoveDir, _orbitEye).normalize();
+  if (_orbitAxis.lengthSq() < 1e-10) return;
+
+  _orbitQuat.setFromAxisAngle(_orbitAxis, angle);
+  _orbitEye.applyQuaternion(_orbitQuat);
+  camera.up.applyQuaternion(_orbitQuat);
+
+  camera.position.copy(controls.target).add(_orbitEye);
+  camera.lookAt(controls.target);
+  controls.update?.();
+}
+
+/**
  * 键盘/按钮微调 orbit（绕 target 旋转）
- * @param {THREE.OrbitControls} controls
+ * @param {{ target: THREE.Vector3 }} controls
  * @param {THREE.PerspectiveCamera} camera
  * @param {number} [dAzimuth=0]
  * @param {number} [dPolar=0]
  */
 export function nudgeOrbitCamera(controls, camera, dAzimuth = 0, dPolar = 0) {
-  const offset = new THREE.Vector3().subVectors(camera.position, controls.target);
-  const spherical = new THREE.Spherical().setFromVector3(offset);
-  spherical.theta += dAzimuth;
-  const minPhi = controls.minPolarAngle ?? 0.01;
-  const maxPhi = controls.maxPolarAngle ?? Math.PI - 0.01;
-  spherical.phi = Math.max(minPhi, Math.min(maxPhi, spherical.phi + dPolar));
-  offset.setFromSpherical(spherical);
-  camera.position.copy(controls.target).add(offset);
-  controls.update();
+  if (!dAzimuth && !dPolar) return;
+  const height = 640;
+  const speed = GALAXY_ZOOM.ORBIT_ROTATE_SPEED ?? 2.4;
+  const dx = dAzimuth ? (-dAzimuth / (2 * Math.PI)) * height / speed : 0;
+  const dy = dPolar ? (-dPolar / (2 * Math.PI)) * height / speed : 0;
+  applyTrackballRotate(controls, camera, dx, dy, height, speed);
 }
 
 /**

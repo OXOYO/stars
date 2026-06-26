@@ -285,7 +285,7 @@ export const GALAXY_ZOOM = {
   MIN_DISTANCE: 0.08,
   /** 最远距离下限（实际会按星云尺度动态放大） */
   MAX_DISTANCE: 800,
-  /** 缩放灵敏度（按钮与滚轮共用） */
+  /** 缩放灵敏度（工具栏按钮每档 notches；滚轮一格对齐同档） */
   ZOOM_SPEED: 1.0,
   /** 每次标准滚轮刻度在 log 缩放区间内前进的占比（全范围恒定步进） */
   RANGE_FRACTION_PER_NOTCH: 0.055,
@@ -302,13 +302,15 @@ export const GALAXY_ZOOM = {
   /** 天文模式：初始视线方向（略俯视角，便于 orbit） */
   OBSERVER_VIEW_DIR: [0.34, 0.46, 0.82],
   /** OrbitControls 自动环绕速度 */
-  AUTO_ROTATE_SPEED: 0.32,
+  AUTO_ROTATE_SPEED: 0.18,
+  /** 拖拽环视灵敏度（原 OrbitControls rotateSpeed=1 + damping≈0.08 的有效手感） */
+  ORBIT_ROTATE_SPEED: 0.85,
   /** 相机缓动时长（毫秒） */
   CAMERA_FOCUS_MS: 760,
   CAMERA_DOLLY_MS: 260,
   CAMERA_RESET_MS: 680,
   /** 双指 pinch：每像素间距变化换算为 dolly 档位数 */
-  PINCH_NOTCH_PER_PX: 0.006,
+  PINCH_NOTCH_PER_PX: 0.022,
   /** 中键拖拽：每像素纵向位移换算为 dolly 档位数 */
   MIDDLE_DRAG_NOTCH_PER_PX: 0.014,
   /** 方向键 orbit 步长（弧度） */
