@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="/stars/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/stars/favicon.ico" sizes="32x32" />
+    <link rel="preconnect" href="https://avatars.githubusercontent.com" crossorigin />
+    <link rel="dns-prefetch" href="https://avatars.githubusercontent.com" />
+    <link rel="preload" href="/stars/stars.json" as="fetch" crossorigin />
+    <title>Stars</title>
+    <script>
+      (function () {
+        try {
+          var p = localStorage.getItem('stars-color-theme');
+          var dark =
+            p === 'dark' ||
+            (p !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.dataset.starsTheme = dark ? 'dark' : 'light';
+        } catch (e) {}
+      })();
+    </script>
+    <script>
+      (function () {
+        var path = location.pathname;
+        if (!/\/en\/?$/.test(path)) return;
+        var params = new URLSearchParams(location.search);
+        params.set('lang', 'en');
+        var newPath = path.replace(/\/en\/?$/, '/') || '/';
+        var qs = params.toString();
+        location.replace(newPath + (qs ? '?' + qs : ''));
+      })();
+    </script>
+    <script type="module" crossorigin src="/stars/assets/index-JNN3QBHO.js"></script>
+    <link rel="stylesheet" crossorigin href="/stars/assets/index-CGwgjcTW.css">
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
+</html>
